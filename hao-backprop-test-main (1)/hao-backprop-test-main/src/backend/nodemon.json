@@ -1,0 +1,18 @@
+{
+  "watch": [
+    "src/backend/**/*.js"
+  ],
+  "ignore": [
+    "src/backend/**/*.test.js",
+    "src/backend/__tests__/**",
+    "src/backend/node_modules/**"
+  ],
+  "ext": "js,json",
+  "exec": "node src/backend/index.js",
+  "env": {
+    "NODE_ENV": "development"
+  },
+  "delay": "1000",
+  "verbose": true,
+  "restartable": "rs"
+}

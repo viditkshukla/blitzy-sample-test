@@ -1,0 +1,56 @@
+# Prometheus configuration file for Node.js Hello World application monitoring
+# This defines metrics collection settings, scrape targets, and intervals
+
+# Global configuration specifies parameters that are valid in all other configuration contexts
+global:
+  # How frequently to scrape targets by default
+  scrape_interval: 15s
+  # How frequently to evaluate rules
+  evaluation_interval: 15s
+  # How long until a scrape request times out
+  scrape_timeout: 10s
+
+# Scrape configurations contain the targets and parameters for metrics collection
+scrape_configs:
+  # Self-monitoring of the Prometheus server
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+    metrics_path: '/metrics'
+    scheme: 'http'
+
+  # Application metrics monitoring
+  - job_name: 'hello-world-app'
+    static_configs:
+      - targets: ['hello-world-app:3000']
+        labels:
+          service: 'hello-world-app'
+    metrics_path: '/metrics'
+    scheme: 'http'
+    # More frequent scraping for application metrics
+    scrape_interval: 5s
+    scrape_timeout: 3s
+
+  # Application health monitoring
+  - job_name: 'hello-world-health'
+    static_configs:
+      - targets: ['hello-world-app:3000']
+        labels:
+          service: 'hello-world-app'
+          endpoint: 'health'
+    metrics_path: '/health'
+    scheme: 'http'
+    # Less frequent health checks
+    scrape_interval: 30s
+    scrape_timeout: 5s
+
+# Alerting configuration (placeholder - not fully configured for this simple application)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []  # No alertmanager configured
+
+# Rules files (placeholder - not used in this simple configuration)
+rule_files: []

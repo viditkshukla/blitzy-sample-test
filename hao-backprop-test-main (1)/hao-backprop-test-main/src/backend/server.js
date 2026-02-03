@@ -1,9 +1,10 @@
 /**
  * Server Module
  * 
- * Implements a Node.js HTTP server that exposes a single REST endpoint '/hello'
- * which returns 'Hello world' to clients. This module contains the core server
- * implementation, including server creation, request routing, and error handling.
+ * Implements a Node.js HTTP server that exposes REST endpoints for the Hello World
+ * application including '/hello' for the main greeting, '/health' for monitoring
+ * health checks, and '/metrics' for Prometheus scraping. This module contains the 
+ * core server implementation, including server creation, request routing, and error handling.
  * 
  * @module server
  */
@@ -21,6 +22,8 @@ const logger = require('./utils/logger');
 
 // Import handlers
 const { handleHelloRequest } = require('./handlers/helloHandler');
+const { handleHealthRequest } = require('./handlers/healthHandler');
+const { handleMetricsRequest } = require('./handlers/metricsHandler');
 const { handleNotFound, handleServerError } = require('./handlers/error');
 
 // Import middleware
@@ -36,7 +39,9 @@ let server = null;
  */
 function createRoutes() {
   return {
-    '/hello': handleHelloRequest
+    '/hello': handleHelloRequest,
+    '/health': handleHealthRequest,
+    '/metrics': handleMetricsRequest
   };
 }
 

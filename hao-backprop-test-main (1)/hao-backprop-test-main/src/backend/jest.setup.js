@@ -6,7 +6,7 @@
  */
 
 // Import internal dependencies
-const logger = require('../utils/logger');
+const logger = require('./utils/logger');
 
 /**
  * Sets up global mocks for console methods and other utilities

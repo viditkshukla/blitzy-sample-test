@@ -29,7 +29,11 @@ const HTTP_STATUS = {
  */
 const ROUTES = {
   /** Hello endpoint route */
-  HELLO: '/hello'
+  HELLO: '/hello',
+  /** Health check endpoint route for monitoring */
+  HEALTH: '/health',
+  /** Prometheus metrics endpoint route */
+  METRICS: '/metrics'
 };
 
 /**
@@ -55,7 +59,9 @@ const MESSAGES = {
   /** Message for 500 Internal Server Error responses */
   SERVER_ERROR: 'Internal Server Error',
   /** Server startup message (format with port number) */
-  SERVER_STARTED: 'Server started on port %d'
+  SERVER_STARTED: 'Server started on port %d',
+  /** Health check response status indicating healthy state */
+  HEALTH_OK: 'healthy'
 };
 
 /**
@@ -66,6 +72,8 @@ const HEADERS = {
   CONTENT_TYPE: 'Content-Type',
   /** Content-Type value for plain text responses */
   CONTENT_TYPE_TEXT: 'text/plain',
+  /** Content-Type value for JSON responses */
+  CONTENT_TYPE_JSON: 'application/json',
   /** Allow header for Method Not Allowed responses */
   ALLOW: 'Allow'
 };

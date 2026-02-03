@@ -18,12 +18,19 @@ module.exports = {
   // Look for test files in __tests__ directories with .test.js extension
   testMatch: ['**/__tests__/**/*.test.js'],
   
+  // Ignore patterns for test files
+  testPathIgnorePatterns: ['/node_modules/'],
+  
+  // Setup files to run before each test file
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
+  
   // Collect coverage from all JavaScript files, with some exclusions
   collectCoverageFrom: [
     '**/*.js',
     '!**/node_modules/**',
     '!**/coverage/**',
     '!**/jest.config.js',
+    '!**/jest.setup.js',
     '!**/.eslintrc.js'
   ],
   
@@ -37,7 +44,7 @@ module.exports = {
       statements: 85
     },
     // Critical path coverage requirements
-    './handlers/hello.js': {
+    './handlers/helloHandler.js': {
       branches: 100,
       functions: 100,
       lines: 100,

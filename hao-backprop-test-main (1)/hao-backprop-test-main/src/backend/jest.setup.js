@@ -30,6 +30,9 @@ function setupLoggerMocks() {
   jest.spyOn(logger, 'debug').mockImplementation(jest.fn());
   jest.spyOn(logger, 'request').mockImplementation(jest.fn());
   jest.spyOn(logger, 'response').mockImplementation(jest.fn());
+  jest.spyOn(logger, 'logRequest').mockImplementation(jest.fn());
+  jest.spyOn(logger, 'logServerStart').mockImplementation(jest.fn());
+  jest.spyOn(logger, 'logServerStop').mockImplementation(jest.fn());
 }
 
 /**

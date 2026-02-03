@@ -17,6 +17,10 @@ const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_NODE_ENV = 'development';
 const DEFAULT_LOG_LEVEL = 'INFO';
 
+// Port validation range (user/dynamic ports only, avoiding privileged ports)
+const MIN_PORT = 1024;
+const MAX_PORT = 65535;
+
 /**
  * Loads environment variables from .env file if it exists
  */
@@ -39,17 +43,17 @@ function loadEnv() {
 }
 
 /**
- * Validates that the port number is within valid range
+ * Validates that the port number is within valid range (1024-65535)
  * 
  * @param {any} port - Port value to validate
- * @returns {number} - Valid port number
+ * @returns {number|null} - Valid port number, or null if invalid
  */
 function validatePort(port) {
   const parsedPort = parseInt(port, 10);
   
-  if (isNaN(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
-    console.warn(`Invalid port: ${port}. Using default port: ${DEFAULT_PORT}`);
-    return DEFAULT_PORT;
+  // Return null if not a number or outside valid range
+  if (isNaN(parsedPort) || parsedPort < MIN_PORT || parsedPort > MAX_PORT) {
+    return null;
   }
   
   return parsedPort;
@@ -65,29 +69,38 @@ function getConfig() {
   loadEnv();
   
   // Get configuration values from environment variables or use defaults
-  const PORT = validatePort(process.env.PORT || DEFAULT_PORT);
-  const HOST = process.env.HOST || DEFAULT_HOST;
-  const NODE_ENV = process.env.NODE_ENV || DEFAULT_NODE_ENV;
-  const LOG_LEVEL = process.env.LOG_LEVEL || DEFAULT_LOG_LEVEL;
+  const validatedPort = validatePort(process.env.PORT);
+  const port = validatedPort !== null ? validatedPort : DEFAULT_PORT;
+  const host = process.env.HOST || DEFAULT_HOST;
+  const nodeEnv = process.env.NODE_ENV || DEFAULT_NODE_ENV;
+  const logLevel = process.env.LOG_LEVEL || DEFAULT_LOG_LEVEL;
   
   // Environment helper flags
-  const IS_DEV = NODE_ENV === 'development';
-  const IS_PROD = NODE_ENV === 'production';
-  const IS_TEST = NODE_ENV === 'test';
+  const isDev = nodeEnv === 'development';
+  const isProd = nodeEnv === 'production';
+  const isTest = nodeEnv === 'test';
   
   return {
-    PORT,
-    HOST,
-    NODE_ENV,
-    LOG_LEVEL,
-    IS_DEV,
-    IS_PROD,
-    IS_TEST
+    port,
+    host,
+    nodeEnv,
+    logLevel,
+    isDev,
+    isProd,
+    isTest,
+    // Also expose uppercase versions for backward compatibility
+    PORT: port,
+    HOST: host,
+    NODE_ENV: nodeEnv,
+    LOG_LEVEL: logLevel,
+    IS_DEV: isDev,
+    IS_PROD: isProd,
+    IS_TEST: isTest
   };
 }
 
-// Get configuration
-const config = getConfig();
-
-// Export configuration
-module.exports = config;
+// Export getConfig as the default export for backwards compatibility and tests
+// Also export validatePort as a named export for direct testing
+module.exports = getConfig;
+module.exports.getConfig = getConfig;
+module.exports.validatePort = validatePort;

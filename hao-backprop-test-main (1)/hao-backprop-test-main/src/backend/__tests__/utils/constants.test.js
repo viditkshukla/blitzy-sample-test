@@ -44,6 +44,14 @@ describe('ROUTES', () => {
   test("should define HELLO as '/hello'", () => {
     expect(ROUTES.HELLO).toBe('/hello');
   });
+
+  test("should define HEALTH as '/health'", () => {
+    expect(ROUTES.HEALTH).toBe('/health');
+  });
+
+  test("should define METRICS as '/metrics'", () => {
+    expect(ROUTES.METRICS).toBe('/metrics');
+  });
 });
 
 /**
@@ -82,6 +90,10 @@ describe('MESSAGES', () => {
   test("should define SERVER_STARTED as 'Server running on port'", () => {
     expect(MESSAGES.SERVER_STARTED).toBe('Server started on port %d');
   });
+
+  test("should define HEALTH_OK as 'healthy'", () => {
+    expect(MESSAGES.HEALTH_OK).toBe('healthy');
+  });
 });
 
 /**
@@ -94,6 +106,10 @@ describe('HEADERS', () => {
 
   test("should define CONTENT_TYPE_TEXT as 'text/plain'", () => {
     expect(HEADERS.CONTENT_TYPE_TEXT).toBe('text/plain');
+  });
+
+  test("should define CONTENT_TYPE_JSON as 'application/json'", () => {
+    expect(HEADERS.CONTENT_TYPE_JSON).toBe('application/json');
   });
 
   test("should define ALLOW as 'Allow'", () => {

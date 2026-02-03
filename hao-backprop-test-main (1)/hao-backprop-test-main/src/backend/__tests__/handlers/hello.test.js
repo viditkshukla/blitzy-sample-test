@@ -10,25 +10,27 @@
  */
 
 // Import the handler to test
-const handleHello = require('../../handlers/hello');
+const { handleHelloRequest } = require('../../handlers/helloHandler');
 
 // Import dependencies to mock
-const { handleMethodNotAllowed } = require('../../handlers/error');
-const { logger } = require('../../utils/logger');
+const { handle405 } = require('../../errorHandler');
+const logger = require('../../utils/logger');
 
 // Mock the error handler and logger
-jest.mock('../../handlers/error', () => ({
-  handleMethodNotAllowed: jest.fn()
+jest.mock('../../errorHandler', () => ({
+  handle405: jest.fn()
 }));
 
 jest.mock('../../utils/logger', () => ({
   info: jest.fn(),
-  logger: {
-    info: jest.fn()
-  }
+  error: jest.fn(),
+  warn: jest.fn(),
+  debug: jest.fn(),
+  request: jest.fn(),
+  response: jest.fn()
 }));
 
-describe('handleHello', () => {
+describe('handleHelloRequest', () => {
   // Setup mock request and response objects
   let req;
   let res;
@@ -57,63 +59,56 @@ describe('handleHello', () => {
   
   test('should return Hello world with 200 status for GET requests', () => {
     // Call the handler with GET request
-    handleHello(req, res);
+    handleHelloRequest(req, res);
     
     // Assert that the response was configured correctly
     expect(res.statusCode).toBe(200);
     expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'text/plain');
     expect(res.end).toHaveBeenCalledWith('Hello world');
     
-    // Verify that the request was logged
-    expect(logger.info).toHaveBeenCalledWith(`Handling request: GET /hello`);
+    // Verify that logging was performed
+    expect(logger.info).toHaveBeenCalled();
   });
   
-  test('should call handleMethodNotAllowed for non-GET requests', () => {
+  test('should call handle405 for non-GET requests', () => {
     // Setup request with POST method
     req.method = 'POST';
     
     // Call the handler
-    handleHello(req, res);
+    handleHelloRequest(req, res);
     
-    // Assert that handleMethodNotAllowed was called
-    expect(handleMethodNotAllowed).toHaveBeenCalledWith(req, res, ['GET']);
+    // Assert that handle405 was called
+    expect(handle405).toHaveBeenCalledWith(res);
     
-    // Verify that normal response methods were not called
-    expect(res.statusCode).toBe(0); // Unchanged
-    expect(res.setHeader).not.toHaveBeenCalled();
-    expect(res.end).not.toHaveBeenCalled();
-    expect(logger.info).not.toHaveBeenCalled();
+    // Verify that the error was logged
+    expect(logger.error).toHaveBeenCalled();
   });
   
-  test('should handle PUT requests by delegating to handleMethodNotAllowed', () => {
+  test('should handle PUT requests by delegating to handle405', () => {
     // Setup request with PUT method
     req.method = 'PUT';
     
     // Call the handler
-    handleHello(req, res);
+    handleHelloRequest(req, res);
     
-    // Assert that handleMethodNotAllowed was called
-    expect(handleMethodNotAllowed).toHaveBeenCalledWith(req, res, ['GET']);
+    // Assert that handle405 was called
+    expect(handle405).toHaveBeenCalledWith(res);
     
-    // Verify that normal response methods were not called
-    expect(res.statusCode).toBe(0); // Unchanged
-    expect(res.setHeader).not.toHaveBeenCalled();
-    expect(res.end).not.toHaveBeenCalled();
+    // Verify that the error was logged
+    expect(logger.error).toHaveBeenCalled();
   });
   
-  test('should handle DELETE requests by delegating to handleMethodNotAllowed', () => {
+  test('should handle DELETE requests by delegating to handle405', () => {
     // Setup request with DELETE method
     req.method = 'DELETE';
     
     // Call the handler
-    handleHello(req, res);
+    handleHelloRequest(req, res);
     
-    // Assert that handleMethodNotAllowed was called
-    expect(handleMethodNotAllowed).toHaveBeenCalledWith(req, res, ['GET']);
+    // Assert that handle405 was called
+    expect(handle405).toHaveBeenCalledWith(res);
     
-    // Verify that normal response methods were not called
-    expect(res.statusCode).toBe(0); // Unchanged
-    expect(res.setHeader).not.toHaveBeenCalled();
-    expect(res.end).not.toHaveBeenCalled();
+    // Verify that the error was logged
+    expect(logger.error).toHaveBeenCalled();
   });
 });

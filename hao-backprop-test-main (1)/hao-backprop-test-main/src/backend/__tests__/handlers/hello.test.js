@@ -16,7 +16,11 @@ jest.mock('../../errorHandler', () => ({
 
 jest.mock('../../utils/logger', () => ({
   info: jest.fn(),
-  error: jest.fn()
+  error: jest.fn(),
+  warn: jest.fn(),
+  debug: jest.fn(),
+  request: jest.fn(),
+  response: jest.fn()
 }));
 
 // Import the handler to test

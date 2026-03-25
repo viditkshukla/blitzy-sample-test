@@ -39,55 +39,82 @@ function loadEnv() {
 }
 
 /**
- * Validates that the port number is within valid range
+ * Validates that the port number is within valid range (1024-65535)
  * 
  * @param {any} port - Port value to validate
- * @returns {number} - Valid port number
+ * @returns {number|null} - Valid port number, or null if invalid
  */
 function validatePort(port) {
   const parsedPort = parseInt(port, 10);
   
-  if (isNaN(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
-    console.warn(`Invalid port: ${port}. Using default port: ${DEFAULT_PORT}`);
-    return DEFAULT_PORT;
+  if (isNaN(parsedPort) || parsedPort < 1024 || parsedPort > 65535) {
+    return null;
   }
   
   return parsedPort;
 }
 
 /**
- * Retrieves the configuration object with all settings
+ * Retrieves the configuration object with all settings.
+ * Returns a frozen object with both lowercase keys (primary API) and
+ * uppercase keys (backward compatibility for existing consumers).
  * 
- * @returns {object} - Configuration object
+ * @returns {object} - Frozen configuration object with port, host, env, logLevel, isDev, isProd, isTest
  */
 function getConfig() {
   // Load environment variables from .env file if it exists
   loadEnv();
   
-  // Get configuration values from environment variables or use defaults
-  const PORT = validatePort(process.env.PORT || DEFAULT_PORT);
-  const HOST = process.env.HOST || DEFAULT_HOST;
-  const NODE_ENV = process.env.NODE_ENV || DEFAULT_NODE_ENV;
-  const LOG_LEVEL = process.env.LOG_LEVEL || DEFAULT_LOG_LEVEL;
+  // Get and validate port — fall back to DEFAULT_PORT if validatePort returns null
+  const rawPort = process.env.PORT || DEFAULT_PORT;
+  const validatedPort = validatePort(rawPort);
+  const port = validatedPort !== null ? validatedPort : DEFAULT_PORT;
+  
+  // Get remaining configuration values from environment variables or defaults
+  const host = process.env.HOST || DEFAULT_HOST;
+  const env = process.env.NODE_ENV || DEFAULT_NODE_ENV;
+  const logLevel = process.env.LOG_LEVEL || DEFAULT_LOG_LEVEL;
   
   // Environment helper flags
-  const IS_DEV = NODE_ENV === 'development';
-  const IS_PROD = NODE_ENV === 'production';
-  const IS_TEST = NODE_ENV === 'test';
+  const isDev = env === 'development';
+  const isProd = env === 'production';
+  const isTest = env === 'test';
   
-  return {
-    PORT,
-    HOST,
-    NODE_ENV,
-    LOG_LEVEL,
-    IS_DEV,
-    IS_PROD,
-    IS_TEST
-  };
+  return Object.freeze({
+    // Lowercase keys (primary API)
+    port,
+    host,
+    env,
+    logLevel,
+    isDev,
+    isProd,
+    isTest,
+    // Uppercase keys (backward compatibility for server.js, index.js, logger.js)
+    PORT: port,
+    HOST: host,
+    NODE_ENV: env,
+    LOG_LEVEL: logLevel,
+    IS_DEV: isDev,
+    IS_PROD: isProd,
+    IS_TEST: isTest
+  });
 }
 
-// Get configuration
+// Run getConfig once at module load for backward-compatible property access
 const config = getConfig();
 
-// Export configuration
-module.exports = config;
+// Export getConfig as the default callable export
+module.exports = getConfig;
+
+// Named export for validatePort
+module.exports.validatePort = validatePort;
+
+// Attach config properties directly for backward-compatible destructuring:
+// e.g., const { PORT, HOST } = require('./config') still works
+module.exports.PORT = config.PORT;
+module.exports.HOST = config.HOST;
+module.exports.NODE_ENV = config.NODE_ENV;
+module.exports.LOG_LEVEL = config.LOG_LEVEL;
+module.exports.IS_DEV = config.IS_DEV;
+module.exports.IS_PROD = config.IS_PROD;
+module.exports.IS_TEST = config.IS_TEST;

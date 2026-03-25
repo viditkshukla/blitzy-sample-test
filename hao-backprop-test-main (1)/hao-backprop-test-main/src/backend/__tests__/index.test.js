@@ -15,7 +15,7 @@ const logger = require('../utils/logger');
 const { MESSAGES } = require('../utils/constants');
 
 // Import the module to test - importing as "main" to match the specification
-const main = require('../index');
+const { main } = require('../index');
 
 describe('index.js', () => {
   // Mock server object

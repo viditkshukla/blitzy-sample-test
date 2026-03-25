@@ -7,14 +7,14 @@
  * @module logger
  */
 
-// Import dependencies
-const { NODE_ENV, IS_TEST } = require('../config');
+// No config imports needed — debug() checks process.env.NODE_ENV at runtime
 
 // Define log levels
 const LOG_LEVELS = {
   INFO: 'INFO',
   WARN: 'WARN',
-  ERROR: 'ERROR'
+  ERROR: 'ERROR',
+  DEBUG: 'DEBUG'
 };
 
 /**
@@ -35,7 +35,7 @@ function formatTimestamp() {
  */
 function formatLogMessage(level, message) {
   const timestamp = formatTimestamp();
-  return `[${timestamp}] ${level}: ${message}`;
+  return `[${timestamp}] [${level}] ${message}`;
 }
 
 /**
@@ -45,11 +45,6 @@ function formatLogMessage(level, message) {
  * @param {string} message - Log message
  */
 function log(level, message) {
-  // Suppress logging in test environment
-  if (IS_TEST) {
-    return;
-  }
-  
   const formattedMessage = formatLogMessage(level, message);
   
   if (level === LOG_LEVELS.ERROR) {
@@ -80,21 +75,29 @@ function warn(message) {
 }
 
 /**
- * Logs an error message with optional error object details
+ * Logs an error message with optional error object details.
+ * When first argument is an Error object, logs the formatted error message
+ * and stack trace as two separate console.error calls.
  * 
- * @param {string} message - Log message
- * @param {Error} [err] - Optional Error object
+ * @param {string|Error} message - Error message string or Error object
+ * @param {Error} [err] - Optional Error object (used when message is a string)
  */
 function error(message, err) {
-  let errorMessage = message;
-  
-  if (err) {
-    errorMessage += `: ${err.message}`;
-    if (err.stack) {
-      errorMessage += `\n${err.stack}`;
+  // Handle case where first argument is an Error object
+  if (message instanceof Error) {
+    const formattedMessage = formatLogMessage(LOG_LEVELS.ERROR, message.message);
+    console.error(formattedMessage);
+    if (message.stack) {
+      console.error(message.stack);
     }
+    return;
   }
   
+  // Handle string message with optional Error object
+  let errorMessage = message;
+  if (err && err instanceof Error) {
+    errorMessage += `: ${err.message}`;
+  }
   log(LOG_LEVELS.ERROR, errorMessage);
 }
 
@@ -142,11 +145,53 @@ function logRequest(req, res, responseTime) {
   }
 }
 
+/**
+ * Logs a debug message (only in development environment)
+ * Checks process.env.NODE_ENV at call time for dynamic environment switching
+ * 
+ * @param {string} message - Debug message
+ */
+function debug(message) {
+  if (process.env.NODE_ENV !== 'development') {
+    return;
+  }
+  const formattedMessage = formatLogMessage(LOG_LEVELS.DEBUG, message);
+  console.debug(formattedMessage);
+}
+
+/**
+ * Logs incoming HTTP request information
+ * 
+ * @param {Object} req - HTTP request object
+ * @param {string} req.method - HTTP method (GET, POST, etc.)
+ * @param {string} req.url - Request URL path
+ */
+function request(req) {
+  const { method, url } = req;
+  log(LOG_LEVELS.INFO, `${method} ${url}`);
+}
+
+/**
+ * Logs outgoing HTTP response information
+ * 
+ * @param {Object} res - HTTP response object
+ * @param {number} res.statusCode - HTTP status code
+ * @param {Function} res.getHeader - Method to get response headers
+ */
+function response(res) {
+  const { statusCode } = res;
+  const contentLength = res.getHeader('Content-Length');
+  log(LOG_LEVELS.INFO, `${statusCode} - ${contentLength} bytes`);
+}
+
 // Export the logger object
 const logger = {
   info,
   warn,
   error,
+  debug,
+  request,
+  response,
   logServerStart,
   logServerStop,
   logRequest

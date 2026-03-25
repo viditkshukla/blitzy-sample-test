@@ -15,7 +15,7 @@ const request = require('supertest'); // v6.3.3
 
 // Import modules to test
 const { startServer, stopServer } = require('../server');
-const handleHello = require('../handlers/hello');
+const helloHandler = require('../handlers/helloHandler');
 const { handleNotFound, handleServerError } = require('../handlers/error');
 const logger = require('../utils/logger');
 const { PORT, HOST } = require('../config');
@@ -184,18 +184,22 @@ describe('stopServer', () => {
 });
 
 describe('request handling', () => {
-  beforeEach(async () => {
+  const { createServer } = require('../server');
+
+  beforeEach(() => {
     // Restore original modules for these integration tests
     jest.restoreAllMocks();
     
-    // Start a real server for request testing
-    testServer = await startServer();
+    // Create a server without binding to a specific port
+    // Supertest will automatically bind to an ephemeral port
+    testServer = createServer();
   });
 
-  afterEach(async () => {
-    // Stop the server after each test
-    if (testServer) {
-      await stopServer(testServer);
+  afterEach(() => {
+    // Close the server after each test
+    if (testServer && testServer.close) {
+      testServer.close();
+      testServer = null;
     }
   });
 
@@ -227,16 +231,16 @@ describe('request handling', () => {
   });
 
   test('should handle server errors correctly', async () => {
-    // Stop the server so we can restart with mocked handlers
-    await stopServer(testServer);
+    // Close the current server to create a new one with mocked handler
+    testServer.close();
     
-    // Mock handleHello to throw an error
-    jest.spyOn(handleHello, 'default' in handleHello ? 'default' : '').mockImplementation(() => {
+    // Mock handleHelloRequest to throw an error
+    jest.spyOn(helloHandler, 'handleHelloRequest').mockImplementation(() => {
       throw new Error('Test error');
     });
     
-    // Restart server with mocked handler
-    testServer = await startServer();
+    // Create a new server that will use the mocked handler
+    testServer = createServer();
     
     await request(testServer)
       .get('/hello')

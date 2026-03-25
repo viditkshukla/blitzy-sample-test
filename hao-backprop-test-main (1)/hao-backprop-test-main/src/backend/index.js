@@ -3,13 +3,13 @@
  * 
  * This is the main entry point for the Node.js Hello World application.
  * It initializes and starts the HTTP server, handles process signals for
- * graceful shutdown, and exports the server instance for testing purposes.
+ * graceful shutdown, and exports the main initialization function for testing purposes.
  * 
  * @module index
  */
 
 // Import server functions
-const { startServer, stopServer } = require('./server');
+const { createServer, startServer, setupGracefulShutdown } = require('./server');
 
 // Import logger for application logging
 const { info, error } = require('./utils/logger');
@@ -17,59 +17,39 @@ const { info, error } = require('./utils/logger');
 // Import configuration
 const { IS_TEST } = require('./config');
 
-// Server instance reference
+// Module-level server reference, updated when main() initializes the application
 let server = null;
 
 /**
- * Sets up event listeners for process termination signals to ensure graceful server shutdown
- */
-function setupGracefulShutdown() {
-  // Handle SIGINT signal (Ctrl+C)
-  process.on('SIGINT', () => {
-    info('SIGINT signal received. Shutting down server...');
-    stopServer()
-      .then(() => {
-        process.exit(0);
-      })
-      .catch((err) => {
-        error('Error during shutdown', err);
-        process.exit(1);
-      });
-  });
-
-  // Handle SIGTERM signal (termination request)
-  process.on('SIGTERM', () => {
-    info('SIGTERM signal received. Shutting down server...');
-    stopServer()
-      .then(() => {
-        process.exit(0);
-      })
-      .catch((err) => {
-        error('Error during shutdown', err);
-        process.exit(1);
-      });
-  });
-}
-
-/**
- * Main function that initializes and starts the application
+ * Main function that initializes and starts the application.
+ * Creates the HTTP server, starts it, sets up graceful shutdown,
+ * and returns the server instance.
  * 
- * @returns {Promise<void>} Promise that resolves when the server has started
+ * @returns {Promise<http.Server>} Promise that resolves with the server instance
  */
 async function main() {
   try {
-    info('Starting Node.js Hello World application...');
+    // Create the HTTP server
+    server = createServer();
     
     // Start the HTTP server
-    server = await startServer();
+    await startServer(server);
     
     // Set up graceful shutdown
-    setupGracefulShutdown();
+    setupGracefulShutdown(server);
     
-    info('Application startup complete.');
+    // Log successful initialization
+    info('Application initialized successfully');
+    
+    // Update the exported server reference for external access
+    module.exports.server = server;
+    
+    return server;
   } catch (err) {
-    error('Failed to start application', err);
-    process.exit(1);
+    // Log the error message and error object separately
+    error('Failed to initialize application:');
+    error(err);
+    throw err;
   }
 }
 
@@ -78,7 +58,5 @@ if (!IS_TEST) {
   main();
 }
 
-// Export the server instance for testing
-module.exports = {
-  server
-};
+// Export main function and server reference for testing and external access
+module.exports = { main, server };

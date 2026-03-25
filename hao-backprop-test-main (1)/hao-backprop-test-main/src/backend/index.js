@@ -17,6 +17,9 @@ const { info, error } = require('./utils/logger');
 // Import configuration
 const { IS_TEST } = require('./config');
 
+// Module-level server reference, updated when main() initializes the application
+let server = null;
+
 /**
  * Main function that initializes and starts the application.
  * Creates the HTTP server, starts it, sets up graceful shutdown,
@@ -27,7 +30,7 @@ const { IS_TEST } = require('./config');
 async function main() {
   try {
     // Create the HTTP server
-    const server = createServer();
+    server = createServer();
     
     // Start the HTTP server
     await startServer(server);
@@ -37,6 +40,9 @@ async function main() {
     
     // Log successful initialization
     info('Application initialized successfully');
+    
+    // Update the exported server reference for external access
+    module.exports.server = server;
     
     return server;
   } catch (err) {
@@ -52,5 +58,5 @@ if (!IS_TEST) {
   main();
 }
 
-// Export main as the default export
-module.exports = main;
+// Export main function and server reference for testing and external access
+module.exports = { main, server };

@@ -4,37 +4,36 @@
  * This test suite makes actual HTTP requests to a running server instance
  * and verifies the responses match the expected behavior for all supported
  * endpoints and HTTP methods.
+ * 
+ * Uses supertest with the server instance directly to avoid port conflicts
+ * during parallel test execution. Supertest handles ephemeral port binding
+ * automatically when given an http.Server instance.
  */
 
 const request = require('supertest'); // v6.3.3
-const { server } = require('../../index');
-const { startServer, stopServer } = require('../../server');
+const { createServer } = require('../../server');
 const { HTTP_STATUS, MESSAGES, ROUTES } = require('../../utils/constants');
-const getConfig = require('../../config'); // Default import
 
 describe('API Integration Tests', () => {
   let serverInstance;
   
-  // Start the server before all tests
-  beforeAll(async () => {
-    // Create and start a server instance for testing
-    const { createServer } = require('../../server');
+  // Create the server before all tests — supertest binds to an ephemeral port
+  beforeAll(() => {
     serverInstance = createServer();
-    await startServer(serverInstance);
   });
   
-  // Stop the server after all tests
-  afterAll(async () => {
+  // Close the server after all tests to release resources
+  afterAll((done) => {
     if (serverInstance && serverInstance.listening) {
-      await stopServer(serverInstance);
+      serverInstance.close(done);
+    } else {
+      done();
     }
   });
   
   // Test GET request to /hello endpoint
   test('GET /hello should return 200 OK with \'Hello world\'', async () => {
-    const config = getConfig();
-    
-    const response = await request(`http://localhost:${config.port}`)
+    const response = await request(serverInstance)
       .get(ROUTES.HELLO)
       .expect(HTTP_STATUS.OK)
       .expect('Content-Type', 'text/plain');
@@ -44,9 +43,7 @@ describe('API Integration Tests', () => {
   
   // Test POST request to /hello endpoint
   test('POST /hello should return 405 Method Not Allowed', async () => {
-    const config = getConfig();
-    
-    const response = await request(`http://localhost:${config.port}`)
+    const response = await request(serverInstance)
       .post(ROUTES.HELLO)
       .expect(HTTP_STATUS.METHOD_NOT_ALLOWED)
       .expect('Content-Type', 'text/plain')
@@ -57,9 +54,7 @@ describe('API Integration Tests', () => {
   
   // Test PUT request to /hello endpoint
   test('PUT /hello should return 405 Method Not Allowed', async () => {
-    const config = getConfig();
-    
-    const response = await request(`http://localhost:${config.port}`)
+    const response = await request(serverInstance)
       .put(ROUTES.HELLO)
       .expect(HTTP_STATUS.METHOD_NOT_ALLOWED)
       .expect('Content-Type', 'text/plain')
@@ -70,9 +65,7 @@ describe('API Integration Tests', () => {
   
   // Test DELETE request to /hello endpoint
   test('DELETE /hello should return 405 Method Not Allowed', async () => {
-    const config = getConfig();
-    
-    const response = await request(`http://localhost:${config.port}`)
+    const response = await request(serverInstance)
       .delete(ROUTES.HELLO)
       .expect(HTTP_STATUS.METHOD_NOT_ALLOWED)
       .expect('Content-Type', 'text/plain')
@@ -83,9 +76,7 @@ describe('API Integration Tests', () => {
   
   // Test GET request to undefined route
   test('GET /undefined should return 404 Not Found', async () => {
-    const config = getConfig();
-    
-    const response = await request(`http://localhost:${config.port}`)
+    const response = await request(serverInstance)
       .get('/undefined')
       .expect(HTTP_STATUS.NOT_FOUND)
       .expect('Content-Type', 'text/plain');

@@ -52,8 +52,6 @@ function log(level, message) {
     console.error(formattedMessage);
   } else if (level === LOG_LEVELS.WARN) {
     console.warn(formattedMessage);
-  } else if (level === LOG_LEVELS.DEBUG) {
-    console.debug(formattedMessage);
   } else {
     console.log(formattedMessage);
   }
@@ -84,7 +82,7 @@ function warn(message) {
  * @param {Error} [err] - Optional Error object
  */
 function error(message, err) {
-  // If first argument is an Error object, log its message and stack separately
+  // Handle case where first argument is an Error object
   if (message instanceof Error) {
     const formattedMessage = formatLogMessage(LOG_LEVELS.ERROR, message.message);
     console.error(formattedMessage);
@@ -94,15 +92,11 @@ function error(message, err) {
     return;
   }
   
+  // Handle string message with optional Error object
   let errorMessage = message;
-  
-  if (err) {
+  if (err && err instanceof Error) {
     errorMessage += `: ${err.message}`;
-    if (err.stack) {
-      errorMessage += `\n${err.stack}`;
-    }
   }
-  
   log(LOG_LEVELS.ERROR, errorMessage);
 }
 
@@ -157,9 +151,11 @@ function logRequest(req, res, responseTime) {
  * @param {string} message - Debug message
  */
 function debug(message) {
-  if (process.env.NODE_ENV === 'development') {
-    log(LOG_LEVELS.DEBUG, message);
+  if (process.env.NODE_ENV !== 'development') {
+    return;
   }
+  const formattedMessage = formatLogMessage(LOG_LEVELS.DEBUG, message);
+  console.debug(formattedMessage);
 }
 
 /**

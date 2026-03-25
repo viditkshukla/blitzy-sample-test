@@ -44,18 +44,11 @@ function route(req, res) {
   // Log the incoming request
   logger.request(req);
   
-  // Parse the URL from the request, handling undefined/invalid URLs gracefully
-  let pathname = '/';
-  try {
-    const parsedUrl = url.parse(req.url);
-    pathname = parsedUrl.pathname || '/';
-  } catch (err) {
-    // Fall back to root path if URL parsing fails
-    pathname = '/';
-  }
+  // Parse the URL from the request
+  const parsedUrl = url.parse(req.url);
   
-  // Log debugging information about the parsed path
-  logger.debug(`Routing request to path: ${pathname}`);
+  // Extract the pathname from the parsed URL
+  const pathname = parsedUrl.pathname;
   
   // Find the matching route handler
   const handler = matchRoute(pathname);

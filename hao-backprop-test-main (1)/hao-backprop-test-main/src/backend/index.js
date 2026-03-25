@@ -3,7 +3,7 @@
  * 
  * This is the main entry point for the Node.js Hello World application.
  * It initializes and starts the HTTP server, handles process signals for
- * graceful shutdown, and exports the server instance for testing purposes.
+ * graceful shutdown, and exports the main initialization function for testing purposes.
  * 
  * @module index
  */

@@ -7,8 +7,7 @@
  * @module logger
  */
 
-// Import dependencies
-const { NODE_ENV, IS_TEST } = require('../config');
+// No config imports needed — debug() checks process.env.NODE_ENV at runtime
 
 // Define log levels
 const LOG_LEVELS = {
@@ -76,10 +75,12 @@ function warn(message) {
 }
 
 /**
- * Logs an error message with optional error object details
+ * Logs an error message with optional error object details.
+ * When first argument is an Error object, logs the formatted error message
+ * and stack trace as two separate console.error calls.
  * 
- * @param {string} message - Log message
- * @param {Error} [err] - Optional Error object
+ * @param {string|Error} message - Error message string or Error object
+ * @param {Error} [err] - Optional Error object (used when message is a string)
  */
 function error(message, err) {
   // Handle case where first argument is an Error object

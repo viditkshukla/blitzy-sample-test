@@ -176,6 +176,7 @@ function startServer(srv) {
 /**
  * Gracefully stops the HTTP server, closing all connections
  * 
+ * @param {http.Server} [srv] - Optional server instance to stop. Falls back to the module-level server if not provided.
  * @returns {Promise<void>} Promise that resolves when the server has stopped
  */
 function stopServer(srv) {

@@ -81,6 +81,7 @@ describe('handleHelloRequest', () => {
     expect(handle405).toHaveBeenCalledWith(res);
     
     // Verify that normal response methods were not called
+    expect(res.statusCode).toBe(0);
     expect(res.setHeader).not.toHaveBeenCalled();
     expect(res.end).not.toHaveBeenCalled();
     
@@ -100,6 +101,7 @@ describe('handleHelloRequest', () => {
     expect(handle405).toHaveBeenCalledWith(res);
     
     // Verify that normal response methods were not called
+    expect(res.statusCode).toBe(0);
     expect(res.setHeader).not.toHaveBeenCalled();
     expect(res.end).not.toHaveBeenCalled();
   });
@@ -115,6 +117,7 @@ describe('handleHelloRequest', () => {
     expect(handle405).toHaveBeenCalledWith(res);
     
     // Verify that normal response methods were not called
+    expect(res.statusCode).toBe(0);
     expect(res.setHeader).not.toHaveBeenCalled();
     expect(res.end).not.toHaveBeenCalled();
   });

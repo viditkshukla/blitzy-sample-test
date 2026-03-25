@@ -7,9 +7,9 @@
  */
 
 // Import the configuration module and constants
-const getConfig = require('../../config');
-const { validatePort } = require('../../config');
-const { CONFIG } = require('../../utils/constants');
+const getConfig = require('../config');
+const { validatePort } = require('../config');
+const { CONFIG } = require('../utils/constants');
 
 /**
  * Helper function to mock environment variables for testing

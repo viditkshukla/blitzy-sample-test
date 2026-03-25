@@ -14,7 +14,8 @@ const { NODE_ENV, IS_TEST } = require('../config');
 const LOG_LEVELS = {
   INFO: 'INFO',
   WARN: 'WARN',
-  ERROR: 'ERROR'
+  ERROR: 'ERROR',
+  DEBUG: 'DEBUG'
 };
 
 /**
@@ -35,7 +36,7 @@ function formatTimestamp() {
  */
 function formatLogMessage(level, message) {
   const timestamp = formatTimestamp();
-  return `[${timestamp}] ${level}: ${message}`;
+  return `[${timestamp}] [${level}] ${message}`;
 }
 
 /**
@@ -45,17 +46,14 @@ function formatLogMessage(level, message) {
  * @param {string} message - Log message
  */
 function log(level, message) {
-  // Suppress logging in test environment
-  if (IS_TEST) {
-    return;
-  }
-  
   const formattedMessage = formatLogMessage(level, message);
   
   if (level === LOG_LEVELS.ERROR) {
     console.error(formattedMessage);
   } else if (level === LOG_LEVELS.WARN) {
     console.warn(formattedMessage);
+  } else if (level === LOG_LEVELS.DEBUG) {
+    console.debug(formattedMessage);
   } else {
     console.log(formattedMessage);
   }
@@ -86,6 +84,16 @@ function warn(message) {
  * @param {Error} [err] - Optional Error object
  */
 function error(message, err) {
+  // If first argument is an Error object, log its message and stack separately
+  if (message instanceof Error) {
+    const formattedMessage = formatLogMessage(LOG_LEVELS.ERROR, message.message);
+    console.error(formattedMessage);
+    if (message.stack) {
+      console.error(message.stack);
+    }
+    return;
+  }
+  
   let errorMessage = message;
   
   if (err) {
@@ -142,11 +150,51 @@ function logRequest(req, res, responseTime) {
   }
 }
 
+/**
+ * Logs a debug message (only in development environment)
+ * Checks process.env.NODE_ENV at call time for dynamic environment switching
+ * 
+ * @param {string} message - Debug message
+ */
+function debug(message) {
+  if (process.env.NODE_ENV === 'development') {
+    log(LOG_LEVELS.DEBUG, message);
+  }
+}
+
+/**
+ * Logs incoming HTTP request information
+ * 
+ * @param {Object} req - HTTP request object
+ * @param {string} req.method - HTTP method (GET, POST, etc.)
+ * @param {string} req.url - Request URL path
+ */
+function request(req) {
+  const { method, url } = req;
+  log(LOG_LEVELS.INFO, `${method} ${url}`);
+}
+
+/**
+ * Logs outgoing HTTP response information
+ * 
+ * @param {Object} res - HTTP response object
+ * @param {number} res.statusCode - HTTP status code
+ * @param {Function} res.getHeader - Method to get response headers
+ */
+function response(res) {
+  const { statusCode } = res;
+  const contentLength = res.getHeader('Content-Length');
+  log(LOG_LEVELS.INFO, `${statusCode} - ${contentLength} bytes`);
+}
+
 // Export the logger object
 const logger = {
   info,
   warn,
   error,
+  debug,
+  request,
+  response,
   logServerStart,
   logServerStop,
   logRequest

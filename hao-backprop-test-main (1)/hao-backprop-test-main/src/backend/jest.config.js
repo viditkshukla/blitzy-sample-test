@@ -37,7 +37,7 @@ module.exports = {
       statements: 85
     },
     // Critical path coverage requirements
-    './handlers/hello.js': {
+    './handlers/helloHandler.js': {
       branches: 100,
       functions: 100,
       lines: 100,

@@ -15,11 +15,11 @@ const url = require('url'); // native
 // Import configurations
 const { PORT, HOST } = require('./config');
 
-// Import logger
-const { info, error, logServerStart, logServerStop } = require('./utils/logger');
+// Import logger (use object reference for test spy compatibility)
+const logger = require('./utils/logger');
 
-// Import handlers
-const handleHello = require('./handlers/hello');
+// Import handlers (use object reference for test spy compatibility)
+const helloHandler = require('./handlers/helloHandler');
 const { handleNotFound, handleServerError } = require('./handlers/error');
 
 // Import middleware
@@ -35,7 +35,7 @@ let server = null;
  */
 function createRoutes() {
   return {
-    '/hello': handleHello
+    '/hello': helloHandler.handleHelloRequest
   };
 }
 
@@ -90,33 +90,84 @@ function handleRequest(req, res) {
 }
 
 /**
- * Creates and starts the HTTP server on the specified host and port
+ * Creates an HTTP server with the configured request handler
  * 
+ * @returns {http.Server} The created HTTP server instance
+ */
+function createServer() {
+  const srv = http.createServer(handleRequest);
+  return srv;
+}
+
+/**
+ * Sets up graceful shutdown handlers for the given server instance
+ * 
+ * @param {http.Server} srv - The server instance to set up shutdown for
+ */
+function setupGracefulShutdown(srv) {
+  // Handle SIGINT signal (Ctrl+C)
+  process.on('SIGINT', () => {
+    logger.info('SIGINT signal received. Shutting down server...');
+    stopServer(srv)
+      .then(() => {
+        process.exit(0);
+      })
+      .catch((err) => {
+        logger.error('Error during shutdown', err);
+        process.exit(1);
+      });
+  });
+
+  // Handle SIGTERM signal (termination request)
+  process.on('SIGTERM', () => {
+    logger.info('SIGTERM signal received. Shutting down server...');
+    stopServer(srv)
+      .then(() => {
+        process.exit(0);
+      })
+      .catch((err) => {
+        logger.error('Error during shutdown', err);
+        process.exit(1);
+      });
+  });
+}
+
+/**
+ * Starts the HTTP server on the specified host and port.
+ * If a server instance is provided, it is used; otherwise, a new server is created.
+ * 
+ * @param {http.Server} [srv] - Optional server instance to start
  * @returns {Promise<http.Server>} Promise that resolves with the server instance when started
  */
-function startServer() {
+function startServer(srv) {
   return new Promise((resolve, reject) => {
     try {
-      // Create an HTTP server with the handleRequest function
-      server = http.createServer(handleRequest);
+      // Use provided server or create a new one
+      server = srv || createServer();
       
       // Handle server errors
       server.on('error', (err) => {
-        error('Server error', err);
+        logger.error('Server error', err);
         reject(err);
       });
       
       // Start listening on the specified host and port
-      server.listen(PORT, HOST, () => {
+      server.listen(PORT, HOST, (err) => {
+        if (err) {
+          // Log and reject if an error occurred during startup
+          logger.error('Error starting server', err);
+          reject(err);
+          return;
+        }
         // Log successful server start
-        logServerStart(HOST, PORT);
+        logger.logServerStart(HOST, PORT);
         
         // Resolve the promise with the server instance
         resolve(server);
       });
     } catch (err) {
       // Log and reject if an error occurred during startup
-      error('Error starting server', err);
+      logger.error('Error starting server', err);
       reject(err);
     }
   });
@@ -127,36 +178,41 @@ function startServer() {
  * 
  * @returns {Promise<void>} Promise that resolves when the server has stopped
  */
-function stopServer() {
+function stopServer(srv) {
   return new Promise((resolve, reject) => {
     try {
+      // Use provided server or fall back to module-level server variable
+      const targetServer = srv || server;
+      
       // If server is null or not listening, resolve immediately
-      if (!server || !server.listening) {
+      if (!targetServer || !targetServer.listening) {
         resolve();
         return;
       }
       
       // Close the server
-      server.close((err) => {
+      targetServer.close((err) => {
         if (err) {
           // Log and reject if an error occurred during shutdown
-          error('Error stopping server', err);
+          logger.error('Error stopping server', err);
           reject(err);
           return;
         }
         
         // Log successful server stop
-        logServerStop();
+        logger.logServerStop();
         
-        // Reset server reference
-        server = null;
+        // Reset server reference if we closed the module-level server
+        if (targetServer === server) {
+          server = null;
+        }
         
         // Resolve the promise
         resolve();
       });
     } catch (err) {
       // Log and reject if an error occurred during shutdown
-      error('Error stopping server', err);
+      logger.error('Error stopping server', err);
       reject(err);
     }
   });
@@ -164,6 +220,8 @@ function stopServer() {
 
 // Export the server functions
 module.exports = {
+  createServer,
   startServer,
-  stopServer
+  stopServer,
+  setupGracefulShutdown
 };

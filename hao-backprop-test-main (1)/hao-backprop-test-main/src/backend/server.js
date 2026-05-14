@@ -1,9 +1,10 @@
 /**
  * Server Module
  * 
- * Implements a Node.js HTTP server that exposes a single REST endpoint '/hello'
- * which returns 'Hello world' to clients. This module contains the core server
- * implementation, including server creation, request routing, and error handling.
+ * Implements a Node.js HTTP server that exposes REST endpoints for the Hello World
+ * application including '/hello' for the main greeting, '/health' for monitoring
+ * health checks, and '/metrics' for Prometheus scraping. This module contains the 
+ * core server implementation, including server creation, request routing, and error handling.
  * 
  * @module server
  */
@@ -13,13 +14,16 @@ const http = require('http'); // native
 const url = require('url'); // native
 
 // Import configurations
-const { PORT, HOST } = require('./config');
+const getConfig = require('./config');
+const { PORT, HOST } = getConfig();
 
 // Import logger
-const { info, error, logServerStart, logServerStop } = require('./utils/logger');
+const logger = require('./utils/logger');
 
 // Import handlers
-const handleHello = require('./handlers/hello');
+const { handleHelloRequest } = require('./handlers/helloHandler');
+const { handleHealthRequest } = require('./handlers/healthHandler');
+const { handleMetricsRequest } = require('./handlers/metricsHandler');
 const { handleNotFound, handleServerError } = require('./handlers/error');
 
 // Import middleware
@@ -35,7 +39,9 @@ let server = null;
  */
 function createRoutes() {
   return {
-    '/hello': handleHello
+    '/hello': handleHelloRequest,
+    '/health': handleHealthRequest,
+    '/metrics': handleMetricsRequest
   };
 }
 
@@ -90,33 +96,45 @@ function handleRequest(req, res) {
 }
 
 /**
+ * Creates an HTTP server instance without starting it
+ * 
+ * @returns {http.Server} The HTTP server instance
+ */
+function createServer() {
+  // Create an HTTP server with the handleRequest function
+  const serverInstance = http.createServer(handleRequest);
+  
+  // Handle server errors
+  serverInstance.on('error', (err) => {
+    logger.error('Server error', err);
+  });
+  
+  return serverInstance;
+}
+
+/**
  * Creates and starts the HTTP server on the specified host and port
  * 
+ * @param {http.Server} [serverInstance] - Optional server instance to start
  * @returns {Promise<http.Server>} Promise that resolves with the server instance when started
  */
-function startServer() {
+function startServer(serverInstance) {
   return new Promise((resolve, reject) => {
     try {
-      // Create an HTTP server with the handleRequest function
-      server = http.createServer(handleRequest);
-      
-      // Handle server errors
-      server.on('error', (err) => {
-        error('Server error', err);
-        reject(err);
-      });
+      // Use provided server instance or create a new one
+      server = serverInstance || createServer();
       
       // Start listening on the specified host and port
       server.listen(PORT, HOST, () => {
         // Log successful server start
-        logServerStart(HOST, PORT);
+        logger.logServerStart(HOST, PORT);
         
         // Resolve the promise with the server instance
         resolve(server);
       });
     } catch (err) {
       // Log and reject if an error occurred during startup
-      error('Error starting server', err);
+      logger.error('Error starting server', err);
       reject(err);
     }
   });
@@ -125,45 +143,86 @@ function startServer() {
 /**
  * Gracefully stops the HTTP server, closing all connections
  * 
+ * @param {http.Server} [serverInstance] - Optional server instance to stop
  * @returns {Promise<void>} Promise that resolves when the server has stopped
  */
-function stopServer() {
+function stopServer(serverInstance) {
   return new Promise((resolve, reject) => {
     try {
+      // Use provided server instance or module-level server
+      const targetServer = serverInstance || server;
+      
       // If server is null or not listening, resolve immediately
-      if (!server || !server.listening) {
+      if (!targetServer || !targetServer.listening) {
         resolve();
         return;
       }
       
       // Close the server
-      server.close((err) => {
+      targetServer.close((err) => {
         if (err) {
           // Log and reject if an error occurred during shutdown
-          error('Error stopping server', err);
+          logger.error('Error stopping server', err);
           reject(err);
           return;
         }
         
         // Log successful server stop
-        logServerStop();
+        logger.logServerStop();
         
-        // Reset server reference
-        server = null;
+        // Reset server reference if we stopped the module-level server
+        if (targetServer === server) {
+          server = null;
+        }
         
         // Resolve the promise
         resolve();
       });
     } catch (err) {
       // Log and reject if an error occurred during shutdown
-      error('Error stopping server', err);
+      logger.error('Error stopping server', err);
       reject(err);
     }
   });
 }
 
+/**
+ * Sets up event listeners for process termination signals to ensure graceful server shutdown
+ * 
+ * @param {http.Server} serverInstance - Server instance to gracefully shutdown on signals
+ */
+function setupGracefulShutdown(serverInstance) {
+  // Handle SIGINT signal (Ctrl+C)
+  process.on('SIGINT', () => {
+    logger.info('SIGINT signal received. Shutting down server...');
+    stopServer(serverInstance)
+      .then(() => {
+        process.exit(0);
+      })
+      .catch((err) => {
+        logger.error('Error during shutdown', err);
+        process.exit(1);
+      });
+  });
+
+  // Handle SIGTERM signal (termination request)
+  process.on('SIGTERM', () => {
+    logger.info('SIGTERM signal received. Shutting down server...');
+    stopServer(serverInstance)
+      .then(() => {
+        process.exit(0);
+      })
+      .catch((err) => {
+        logger.error('Error during shutdown', err);
+        process.exit(1);
+      });
+  });
+}
+
 // Export the server functions
 module.exports = {
+  createServer,
   startServer,
-  stopServer
+  stopServer,
+  setupGracefulShutdown
 };

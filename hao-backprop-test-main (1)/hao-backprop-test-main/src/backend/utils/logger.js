@@ -7,14 +7,12 @@
  * @module logger
  */
 
-// Import dependencies
-const { NODE_ENV, IS_TEST } = require('../config');
-
 // Define log levels
 const LOG_LEVELS = {
   INFO: 'INFO',
   WARN: 'WARN',
-  ERROR: 'ERROR'
+  ERROR: 'ERROR',
+  DEBUG: 'DEBUG'
 };
 
 /**
@@ -29,73 +27,92 @@ function formatTimestamp() {
 /**
  * Formats a log message with timestamp, level, and message content
  * 
- * @param {string} level - Log level (INFO, WARN, ERROR)
+ * @param {string} level - Log level (INFO, WARN, ERROR, DEBUG)
  * @param {string} message - Log message
  * @returns {string} Formatted log message
  */
 function formatLogMessage(level, message) {
   const timestamp = formatTimestamp();
-  return `[${timestamp}] ${level}: ${message}`;
+  return `[${timestamp}] [${level}] ${message}`;
 }
 
 /**
- * Base logging function that outputs messages to the console
- * 
- * @param {string} level - Log level (INFO, WARN, ERROR)
- * @param {string} message - Log message
- */
-function log(level, message) {
-  // Suppress logging in test environment
-  if (IS_TEST) {
-    return;
-  }
-  
-  const formattedMessage = formatLogMessage(level, message);
-  
-  if (level === LOG_LEVELS.ERROR) {
-    console.error(formattedMessage);
-  } else if (level === LOG_LEVELS.WARN) {
-    console.warn(formattedMessage);
-  } else {
-    console.log(formattedMessage);
-  }
-}
-
-/**
- * Logs an informational message
+ * Logs an informational message to console.log
  * 
  * @param {string} message - Log message
  */
 function info(message) {
-  log(LOG_LEVELS.INFO, message);
+  const formattedMessage = formatLogMessage(LOG_LEVELS.INFO, message);
+  console.log(formattedMessage);
 }
 
 /**
- * Logs a warning message
+ * Logs a warning message to console.warn
  * 
  * @param {string} message - Log message
  */
 function warn(message) {
-  log(LOG_LEVELS.WARN, message);
+  const formattedMessage = formatLogMessage(LOG_LEVELS.WARN, message);
+  console.warn(formattedMessage);
 }
 
 /**
- * Logs an error message with optional error object details
+ * Logs an error message to console.error
+ * If an Error object is passed, logs the message and stack trace separately
+ * 
+ * @param {string|Error} messageOrError - Log message or Error object
+ */
+function error(messageOrError) {
+  if (messageOrError instanceof Error) {
+    // Log the error message first
+    const formattedMessage = formatLogMessage(LOG_LEVELS.ERROR, messageOrError.message);
+    console.error(formattedMessage);
+    // Log the stack trace separately
+    if (messageOrError.stack) {
+      console.error(messageOrError.stack);
+    }
+  } else {
+    const formattedMessage = formatLogMessage(LOG_LEVELS.ERROR, messageOrError);
+    console.error(formattedMessage);
+  }
+}
+
+/**
+ * Logs a debug message to console.debug (only in development environment)
  * 
  * @param {string} message - Log message
- * @param {Error} [err] - Optional Error object
  */
-function error(message, err) {
-  let errorMessage = message;
-  
-  if (err) {
-    errorMessage += `: ${err.message}`;
-    if (err.stack) {
-      errorMessage += `\n${err.stack}`;
-    }
+function debug(message) {
+  // Only log debug messages in development environment
+  if (process.env.NODE_ENV === 'development') {
+    const formattedMessage = formatLogMessage(LOG_LEVELS.DEBUG, message);
+    console.debug(formattedMessage);
   }
-  
-  log(LOG_LEVELS.ERROR, errorMessage);
+}
+
+/**
+ * Logs information about an incoming HTTP request
+ * 
+ * @param {Object} req - HTTP request object
+ * @param {string} req.method - HTTP method
+ * @param {string} req.url - Request URL
+ */
+function request(req) {
+  const { method, url } = req;
+  info(`${method} ${url}`);
+}
+
+/**
+ * Logs information about an HTTP response
+ * 
+ * @param {Object} res - HTTP response object
+ * @param {number} res.statusCode - HTTP status code
+ * @param {function} res.getHeader - Function to get response headers
+ */
+function response(res) {
+  const { statusCode } = res;
+  const contentLength = res.getHeader('Content-Length');
+  info(`${statusCode} - ${contentLength} bytes`);
 }
 
 /**
@@ -116,23 +133,18 @@ function logServerStop() {
 }
 
 /**
- * Logs information about an HTTP request and its response
+ * Logs information about an HTTP request and its response with timing
  * 
  * @param {Object} req - HTTP request object
- * @param {string} req.method - HTTP method
- * @param {string} req.url - Request URL
  * @param {Object} res - HTTP response object
- * @param {number} res.statusCode - HTTP status code
  * @param {number} responseTime - Response time in milliseconds
  */
 function logRequest(req, res, responseTime) {
   const { method, url } = req;
   const { statusCode } = res;
   
-  // Build log message with method, url, status code, and response time
   const message = `${method} ${url} ${statusCode} ${responseTime}ms`;
   
-  // Log with appropriate level based on status code
   if (statusCode >= 500) {
     error(message);
   } else if (statusCode >= 400) {
@@ -142,14 +154,15 @@ function logRequest(req, res, responseTime) {
   }
 }
 
-// Export the logger object
-const logger = {
+// Export individual functions for direct import
+module.exports = {
   info,
   warn,
   error,
+  debug,
+  request,
+  response,
   logServerStart,
   logServerStop,
   logRequest
 };
-
-module.exports = logger;

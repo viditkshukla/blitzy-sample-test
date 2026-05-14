@@ -16,6 +16,8 @@ The application provides a minimal, functional example of a Node.js web service 
 
 - HTTP server implementation in Node.js
 - Single `/hello` endpoint returning "Hello world" text
+- Dedicated `/health` endpoint for container health checks
+- Prometheus `/metrics` endpoint for observability
 - Support for both native HTTP module and Express.js implementations
 - Basic request logging
 - Error handling for various scenarios
@@ -183,6 +185,63 @@ Content-Security-Policy: default-src 'none'
 Hello world
 ```
 
+### GET /health
+
+Returns a JSON health check response indicating the service health status. This endpoint is designed for use by container orchestrators (Docker, Kubernetes) to verify the application is running and responsive.
+
+**Request**
+
+```
+GET /health HTTP/1.1
+Host: localhost:3000
+```
+
+**Response**
+
+```
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Content-Security-Policy: default-src 'none'
+
+{
+  "status": "healthy"
+}
+```
+
+### GET /metrics
+
+Returns Prometheus-compatible metrics in text format. This endpoint is scraped by Prometheus for application monitoring and observability.
+
+**Request**
+
+```
+GET /metrics HTTP/1.1
+Host: localhost:3000
+```
+
+**Response**
+
+```
+HTTP/1.1 200 OK
+Content-Type: text/plain
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Content-Security-Policy: default-src 'none'
+
+# HELP http_requests_total Total number of HTTP requests
+# TYPE http_requests_total counter
+http_requests_total{method="GET",path="/hello",status="200"} 42
+# HELP http_request_duration_seconds HTTP request duration in seconds
+# TYPE http_request_duration_seconds histogram
+http_request_duration_seconds_bucket{le="0.1"} 39
+http_request_duration_seconds_bucket{le="0.5"} 42
+http_request_duration_seconds_bucket{le="+Inf"} 42
+```
+
+**Note:** The metrics endpoint exposes application metrics in Prometheus text format. Prometheus is configured to scrape this endpoint at 5-second intervals for monitoring purposes.
+
 ### Error Responses
 
 **404 Not Found**
@@ -274,6 +333,32 @@ When running with Docker Compose, the application includes Prometheus and Grafan
 - **Grafana**: Provides visualization dashboards
   - Access at: http://localhost:3001
   - Default credentials: admin/admin
+
+### Monitoring Endpoints
+
+The application exposes dedicated endpoints for monitoring and observability:
+
+- **`/health` Endpoint**: Used by container orchestrators (Docker, Kubernetes) to perform health checks on the application. Returns a JSON response indicating the service health status. Container orchestration platforms use this endpoint to determine if a container is healthy and ready to receive traffic.
+
+- **`/metrics` Endpoint**: Exposes Prometheus-compatible metrics in text format. Prometheus scrapes this endpoint at 5-second intervals to collect application metrics for monitoring and alerting purposes.
+
+### Prometheus Configuration
+
+The Prometheus instance is pre-configured to scrape the following targets:
+
+| Job Name | Endpoint | Scrape Interval | Purpose |
+|----------|----------|-----------------|---------|
+| hello-world-app | /metrics | 5 seconds | Application metrics collection |
+| hello-world-health | /health | 30 seconds | Health check status monitoring |
+
+### Available Metrics
+
+The `/metrics` endpoint exposes the following metrics:
+
+- **http_requests_total**: Counter for total HTTP requests (labeled by method, path, status)
+- **http_request_duration_seconds**: Histogram for HTTP request duration
+- **process_cpu_seconds_total**: Total CPU time spent in the process
+- **process_resident_memory_bytes**: Resident memory size in bytes
 
 The monitoring setup includes:
 - Basic server metrics (CPU, memory, request count)

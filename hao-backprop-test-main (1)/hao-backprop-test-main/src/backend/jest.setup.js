@@ -6,7 +6,7 @@
  */
 
 // Import internal dependencies
-const logger = require('../utils/logger');
+const logger = require('./utils/logger');
 
 /**
  * Sets up global mocks for console methods and other utilities
@@ -30,6 +30,9 @@ function setupLoggerMocks() {
   jest.spyOn(logger, 'debug').mockImplementation(jest.fn());
   jest.spyOn(logger, 'request').mockImplementation(jest.fn());
   jest.spyOn(logger, 'response').mockImplementation(jest.fn());
+  jest.spyOn(logger, 'logRequest').mockImplementation(jest.fn());
+  jest.spyOn(logger, 'logServerStart').mockImplementation(jest.fn());
+  jest.spyOn(logger, 'logServerStop').mockImplementation(jest.fn());
 }
 
 /**

@@ -44,22 +44,27 @@ function route(req, res) {
   // Log the incoming request
   logger.request(req);
   
-  // Parse the URL from the request
-  const parsedUrl = url.parse(req.url);
+  // Parse the URL from the request - handle undefined/null URLs gracefully
+  let pathname = '/';
+  try {
+    const parsedUrl = url.parse(req.url || '/');
+    pathname = parsedUrl.pathname || '/';
+  } catch (err) {
+    // Default to root path on parsing error
+    pathname = '/';
+  }
   
-  // Extract the pathname from the parsed URL
-  const pathname = parsedUrl.pathname;
+  // Log debug information about the path being routed
+  logger.debug(`Routing request to path: ${pathname}`);
   
   // Find the matching route handler
   const handler = matchRoute(pathname);
   
   if (handler) {
     // If a handler is found, call it with the request and response objects
-    logger.info(`Routing to handler for path: ${pathname}`);
     handler(req, res);
   } else {
     // If no handler is found, return a 404 Not Found response
-    logger.info(`No handler found for path: ${pathname}`);
     handle404(res);
   }
 }

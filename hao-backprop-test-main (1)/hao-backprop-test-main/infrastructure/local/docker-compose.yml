@@ -23,7 +23,7 @@ services:
       - /app/node_modules
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/hello"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/welcome"]
       interval: 30s
       timeout: 10s
       retries: 3

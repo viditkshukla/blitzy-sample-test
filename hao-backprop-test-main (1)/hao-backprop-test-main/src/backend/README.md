@@ -1,6 +1,6 @@
 # Node.js Hello World Service
 
-A simple Node.js HTTP server application that exposes a single REST endpoint `/hello` which returns "Hello world" to clients.
+A simple Node.js HTTP server application that exposes a single REST endpoint `/welcome` which serves a Welcome screen to clients.
 
 ## Overview
 
@@ -9,7 +9,7 @@ This project demonstrates fundamental Node.js web service concepts with minimal 
 ## Features
 
 - HTTP server implementation in Node.js
-- Single `/hello` endpoint returning "Hello world" text
+- Single `/welcome` endpoint serving a Welcome screen (heading and short description) as HTML
 - Support for both native HTTP module and Express.js implementations
 - Basic request logging
 - Error handling for various scenarios
@@ -76,13 +76,23 @@ Once the server is running, you can access the endpoint:
 
 ```bash
 # Using curl
-curl http://localhost:3000/hello
+curl http://localhost:3000/welcome
 
 # Expected response
-Hello world
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Welcome to HelloGHES</title>
+</head>
+<body>
+<h1>Welcome to HelloGHES</h1>
+<p>A simple Node.js service that greets you from the /welcome endpoint.</p>
+</body>
+</html>
 ```
 
-You can also access the endpoint in a web browser by navigating to `http://localhost:3000/hello`.
+You can also access the endpoint in a web browser by navigating to `http://localhost:3000/welcome`.
 
 ## Project Structure
 
@@ -94,7 +104,7 @@ src/backend/
 │   └── server-express.test.js # Express server tests
 ├── handlers/            # Request handlers
 │   ├── error.js         # Error handlers
-│   └── hello.js         # Hello endpoint handler
+│   └── welcomeHandler.js  # Welcome endpoint handler
 ├── middleware/          # Middleware functions
 │   └── index.js         # Middleware definitions
 ├── utils/               # Utility functions
@@ -114,14 +124,14 @@ src/backend/
 
 ## API Documentation
 
-### GET /hello
+### GET /welcome
 
-Returns a simple "Hello world" message.
+Returns a simple Welcome screen as an HTML document.
 
 **Request**
 
 ```
-GET /hello HTTP/1.1
+GET /welcome HTTP/1.1
 Host: localhost:3000
 ```
 
@@ -129,12 +139,22 @@ Host: localhost:3000
 
 ```
 HTTP/1.1 200 OK
-Content-Type: text/plain
+Content-Type: text/html; charset=utf-8
 X-Content-Type-Options: nosniff
 X-Frame-Options: DENY
 Content-Security-Policy: default-src 'none'
 
-Hello world
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Welcome to HelloGHES</title>
+</head>
+<body>
+<h1>Welcome to HelloGHES</h1>
+<p>A simple Node.js service that greets you from the /welcome endpoint.</p>
+</body>
+</html>
 ```
 
 ### Error Responses

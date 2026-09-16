@@ -392,7 +392,7 @@ main() {
         echo "Next steps:"
         echo "1. Navigate to the backend directory: cd $BACKEND_DIR"
         echo "2. Start the server: npm start"
-        echo "3. Access the service at: http://localhost:$PORT/hello"
+        echo "3. Access the service at: http://localhost:$PORT/welcome"
         echo
     else
         echo

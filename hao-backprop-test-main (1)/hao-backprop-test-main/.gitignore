@@ -1,0 +1,13 @@
+# Dependencies (installed locally with `npm install --no-save`; not declared in package.json)
+node_modules/
+
+# Test and coverage output (jest coverageDirectory and the jest-junit reporter)
+coverage/
+
+# Local environment overrides loaded by src/backend/config.js via dotenv
+.env
+.env.local
+
+# Runtime logs
+*.log
+npm-debug.log*

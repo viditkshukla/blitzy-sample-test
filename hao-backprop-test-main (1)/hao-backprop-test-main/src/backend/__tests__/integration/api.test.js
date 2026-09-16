@@ -1,9 +1,9 @@
 /**
- * Integration tests for the Node.js Hello World server API endpoints.
+ * Integration tests for the Node.js server's /welcome API endpoint.
  * 
  * This test suite makes actual HTTP requests to a running server instance
- * and verifies the responses match the expected behavior for all supported
- * endpoints and HTTP methods.
+ * and verifies the responses match the expected behavior for the /welcome
+ * endpoint, every HTTP method it rejects, and the retired /hello path.
  */
 
 const request = require('supertest'); // v6.3.3

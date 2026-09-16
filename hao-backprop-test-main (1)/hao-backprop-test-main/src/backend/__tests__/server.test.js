@@ -225,11 +225,14 @@ describe('request handling', () => {
   });
 
   test('should return 404 for the retired /hello path', async () => {
-    await request(testServer)
+    // The retired path is no longer registered, so routeRequest falls through
+    // to handleNotFound, which answers 404 with the plain-text NOT_FOUND body.
+    const response = await request(testServer)
       .get('/hello')
       .expect(404)
-      .expect('Content-Type', 'text/plain')
-      .expect('Not Found');
+      .expect('Content-Type', 'text/plain');
+
+    expect(response.text).toBe(MESSAGES.NOT_FOUND);
   });
 
   test('should return 404 for requests to non-existent paths', async () => {

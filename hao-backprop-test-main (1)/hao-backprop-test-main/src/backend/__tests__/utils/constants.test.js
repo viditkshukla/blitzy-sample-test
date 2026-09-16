@@ -41,8 +41,8 @@ describe('HTTP_STATUS', () => {
  * Test suite for route path constants
  */
 describe('ROUTES', () => {
-  test("should define HELLO as '/hello'", () => {
-    expect(ROUTES.HELLO).toBe('/hello');
+  test("should define WELCOME as '/welcome'", () => {
+    expect(ROUTES.WELCOME).toBe('/welcome');
   });
 });
 
@@ -63,8 +63,12 @@ describe('CONFIG', () => {
  * Test suite for message string constants
  */
 describe('MESSAGES', () => {
-  test("should define HELLO_RESPONSE as 'Hello world'", () => {
-    expect(MESSAGES.HELLO_RESPONSE).toBe('Hello world');
+  test("should define WELCOME_HEADING as 'Welcome to HelloGHES'", () => {
+    expect(MESSAGES.WELCOME_HEADING).toBe('Welcome to HelloGHES');
+  });
+
+  test('should define WELCOME_DESCRIPTION as the welcome screen description', () => {
+    expect(MESSAGES.WELCOME_DESCRIPTION).toBe('A simple Node.js service that greets you from the /welcome endpoint.');
   });
 
   test("should define NOT_FOUND as 'Not Found'", () => {
@@ -94,6 +98,10 @@ describe('HEADERS', () => {
 
   test("should define CONTENT_TYPE_TEXT as 'text/plain'", () => {
     expect(HEADERS.CONTENT_TYPE_TEXT).toBe('text/plain');
+  });
+
+  test("should define CONTENT_TYPE_HTML as 'text/html; charset=utf-8'", () => {
+    expect(HEADERS.CONTENT_TYPE_HTML).toBe('text/html; charset=utf-8');
   });
 
   test("should define ALLOW as 'Allow'", () => {

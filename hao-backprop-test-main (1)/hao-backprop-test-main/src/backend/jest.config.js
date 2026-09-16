@@ -7,7 +7,7 @@
  * test execution across different environments.
  * 
  * The configuration enforces strict coverage requirements for critical components
- * like the Hello Handler (100% coverage) while maintaining high but more flexible
+ * like the Welcome Handler (100% coverage) while maintaining high but more flexible
  * requirements for other components.
  */
 
@@ -37,7 +37,7 @@ module.exports = {
       statements: 85
     },
     // Critical path coverage requirements
-    './handlers/hello.js': {
+    './handlers/welcomeHandler.js': {
       branches: 100,
       functions: 100,
       lines: 100,

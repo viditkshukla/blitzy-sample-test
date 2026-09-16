@@ -7,15 +7,22 @@
 const route = require('../router');
 
 // Import handlers and utilities used by the router
-const { handleHelloRequest } = require('../handlers/helloHandler');
+const { handleWelcomeRequest } = require('../handlers/welcomeHandler');
 const { handle404 } = require('../errorHandler');
 const { ROUTES } = require('../utils/constants');
 const logger = require('../utils/logger');
 
 // Mock dependencies
-jest.mock('../handlers/helloHandler');
+jest.mock('../handlers/welcomeHandler');
 jest.mock('../errorHandler');
-jest.mock('../utils/logger');
+// A factory mock is required: automocking only stubs the methods the logger
+// actually exports, and route() calls logger.request.
+jest.mock('../utils/logger', () => ({
+  request: jest.fn(),
+  info: jest.fn(),
+  warn: jest.fn(),
+  error: jest.fn()
+}));
 
 describe('route', () => {
   // Mock request and response objects
@@ -25,7 +32,7 @@ describe('route', () => {
   beforeEach(() => {
     // Setup fresh mocks before each test
     req = {
-      url: '/hello',
+      url: ROUTES.WELCOME,
       method: 'GET'
     };
     res = {};
@@ -39,9 +46,9 @@ describe('route', () => {
     jest.resetAllMocks();
   });
 
-  it('should route to handleHelloRequest for /hello path', () => {
-    // Set request URL to /hello
-    req.url = '/hello';
+  it('should route to handleWelcomeRequest for /welcome path', () => {
+    // Set request URL to /welcome
+    req.url = ROUTES.WELCOME;
     
     // Call the route function
     route(req, res);
@@ -49,11 +56,11 @@ describe('route', () => {
     // Verify the logger was called with the request
     expect(logger.request).toHaveBeenCalledWith(req);
     
-    // Verify debugging information was logged
-    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('/hello'));
+    // Verify routing information was logged
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining(ROUTES.WELCOME));
     
     // Verify the correct handler was called
-    expect(handleHelloRequest).toHaveBeenCalledWith(req, res);
+    expect(handleWelcomeRequest).toHaveBeenCalledWith(req, res);
     
     // Verify the 404 handler was not called
     expect(handle404).not.toHaveBeenCalled();
@@ -69,28 +76,28 @@ describe('route', () => {
     // Verify the logger was called with the request
     expect(logger.request).toHaveBeenCalledWith(req);
     
-    // Verify debugging information was logged
-    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('/undefined'));
+    // Verify routing information was logged
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('/undefined'));
     
     // Verify the 404 handler was called
     expect(handle404).toHaveBeenCalledWith(res);
     
-    // Verify the hello handler was not called
-    expect(handleHelloRequest).not.toHaveBeenCalled();
+    // Verify the welcome handler was not called
+    expect(handleWelcomeRequest).not.toHaveBeenCalled();
   });
 
   it('should correctly parse URL path from request', () => {
     // Set request URL with query parameters
-    req.url = '/hello?param=value';
+    req.url = `${ROUTES.WELCOME}?param=value`;
     
     // Call the route function
     route(req, res);
     
-    // Verify debugging information contains only the path (not query params)
-    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('/hello'));
+    // Verify logged information contains only the path (not query params)
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining(ROUTES.WELCOME));
     
     // Verify the correct handler was called based on the parsed path
-    expect(handleHelloRequest).toHaveBeenCalledWith(req, res);
+    expect(handleWelcomeRequest).toHaveBeenCalledWith(req, res);
     
     // Verify the 404 handler was not called
     expect(handle404).not.toHaveBeenCalled();
@@ -104,24 +111,24 @@ describe('route', () => {
     route(req, res);
     
     // Verify fallback behavior for parsing errors
-    expect(logger.debug).toHaveBeenCalledWith(expect.stringContaining('/'));
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('/'));
     expect(handle404).toHaveBeenCalledWith(res);
-    expect(handleHelloRequest).not.toHaveBeenCalled();
+    expect(handleWelcomeRequest).not.toHaveBeenCalled();
   });
 
   it('should correctly match routes to handlers', () => {
     // Since matchRoute is internal, we'll test the behavior it controls
     
-    // Test the main /hello route
-    req.url = ROUTES.HELLO;
+    // Test the main /welcome route
+    req.url = ROUTES.WELCOME;
     route(req, res);
-    expect(handleHelloRequest).toHaveBeenCalled();
+    expect(handleWelcomeRequest).toHaveBeenCalled();
     jest.clearAllMocks();
     
     // Test with trailing slash (which should be normalized)
-    req.url = ROUTES.HELLO + '/';
+    req.url = ROUTES.WELCOME + '/';
     route(req, res);
-    expect(handleHelloRequest).toHaveBeenCalled();
+    expect(handleWelcomeRequest).toHaveBeenCalled();
     jest.clearAllMocks();
     
     // Test an undefined route

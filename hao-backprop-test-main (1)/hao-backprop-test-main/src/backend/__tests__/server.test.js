@@ -13,12 +13,18 @@ const http = require('http'); // native
 // Import testing utilities
 const request = require('supertest'); // v6.3.3
 
+// Mock the welcome handler so the function object server.js captures at require
+// time is the mock. jest.mock is hoisted above every require below.
+jest.mock('../handlers/welcomeHandler', () => ({ handleWelcomeRequest: jest.fn() }));
+
 // Import modules to test
 const { startServer, stopServer } = require('../server');
-const handleHello = require('../handlers/hello');
+const welcomeHandler = require('../handlers/welcomeHandler');
+const actualWelcome = jest.requireActual('../handlers/welcomeHandler');
 const { handleNotFound, handleServerError } = require('../handlers/error');
 const logger = require('../utils/logger');
 const { PORT, HOST } = require('../config');
+const { MESSAGES, HEADERS } = require('../utils/constants');
 
 // Global reference for test server
 let testServer;
@@ -192,6 +198,14 @@ describe('request handling', () => {
     testServer = await startServer();
   });
 
+  beforeEach(() => {
+    // jest.config.js sets resetMocks: true, which strips the mock's
+    // implementation before every test, so reinstate the real handler.
+    welcomeHandler.handleWelcomeRequest.mockImplementation(
+      (req, res) => actualWelcome.handleWelcomeRequest(req, res)
+    );
+  });
+
   afterEach(async () => {
     // Stop the server after each test
     if (testServer) {
@@ -199,14 +213,23 @@ describe('request handling', () => {
     }
   });
 
-  test('should route GET /hello requests to handleHello', async () => {
+  test('should route GET /welcome requests to handleWelcomeRequest', async () => {
     const response = await request(testServer)
-      .get('/hello')
+      .get('/welcome')
       .expect(200)
-      .expect('Content-Type', 'text/plain');
+      .expect('Content-Type', HEADERS.CONTENT_TYPE_HTML);
       
-    // Assert the response body is "Hello world"
-    expect(response.text).toBe('Hello world');
+    // Assert the response body carries the Welcome screen
+    expect(response.text).toContain(MESSAGES.WELCOME_HEADING);
+    expect(response.text).toContain(MESSAGES.WELCOME_DESCRIPTION);
+  });
+
+  test('should return 404 for the retired /hello path', async () => {
+    await request(testServer)
+      .get('/hello')
+      .expect(404)
+      .expect('Content-Type', 'text/plain')
+      .expect('Not Found');
   });
 
   test('should return 404 for requests to non-existent paths', async () => {
@@ -217,9 +240,9 @@ describe('request handling', () => {
       .expect('Not Found');
   });
 
-  test('should return 405 for non-GET requests to /hello endpoint', async () => {
+  test('should return 405 for non-GET requests to /welcome endpoint', async () => {
     await request(testServer)
-      .post('/hello')
+      .post('/welcome')
       .expect(405)
       .expect('Content-Type', 'text/plain')
       .expect('Allow', 'GET')
@@ -230,8 +253,8 @@ describe('request handling', () => {
     // Stop the server so we can restart with mocked handlers
     await stopServer(testServer);
     
-    // Mock handleHello to throw an error
-    jest.spyOn(handleHello, 'default' in handleHello ? 'default' : '').mockImplementation(() => {
+    // Make the welcome handler throw for the next call only
+    welcomeHandler.handleWelcomeRequest.mockImplementationOnce(() => {
       throw new Error('Test error');
     });
     
@@ -239,18 +262,15 @@ describe('request handling', () => {
     testServer = await startServer();
     
     await request(testServer)
-      .get('/hello')
+      .get('/welcome')
       .expect(500)
       .expect('Content-Type', 'text/plain')
       .expect('Internal Server Error');
-      
-    // Restore the original implementation
-    jest.restoreAllMocks();
   });
 
   test('should set security headers on responses', async () => {
     const response = await request(testServer)
-      .get('/hello');
+      .get('/welcome');
       
     // Assert security headers are set
     expect(response.headers['x-content-type-options']).toBe('nosniff');

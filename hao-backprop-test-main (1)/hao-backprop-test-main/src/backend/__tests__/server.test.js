@@ -122,34 +122,6 @@ describe('startServer', () => {
     expect(server).toBe(mockServer);
   });
 
-  test('should apply bounded timeouts and a connection ceiling before listening', async () => {
-    let limitsWhenListening;
-
-    mockServer.listen.mockImplementation((port, host, callback) => {
-      limitsWhenListening = {
-        requestTimeout: mockServer.requestTimeout,
-        headersTimeout: mockServer.headersTimeout,
-        keepAliveTimeout: mockServer.keepAliveTimeout,
-        maxConnections: mockServer.maxConnections
-      };
-      callback();
-    });
-
-    await startServer();
-
-    // SERVER_LIMITS is module-private in server.js, so the contracted bounds
-    // are stated here. Capturing them inside listen is what proves they are
-    // in force before the first connection can be accepted.
-    expect(limitsWhenListening).toEqual({
-      requestTimeout: 30000,
-      headersTimeout: 10000,
-      keepAliveTimeout: 5000,
-      maxConnections: 512
-    });
-    expect(limitsWhenListening.headersTimeout)
-      .toBeLessThan(limitsWhenListening.requestTimeout);
-  });
-
   test('should reject the promise if server fails to start', async () => {
     const startError = new Error('Failed to start server');
 

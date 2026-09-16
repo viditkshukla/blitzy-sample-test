@@ -7,7 +7,7 @@
  */
 
 // Import Node.js core modules
-const url = require('url');
+const url = require('url'); // built-in
 
 // Import application modules
 const { handleWelcomeRequest } = require('./handlers/welcomeHandler');
@@ -17,57 +17,52 @@ const logger = require('./utils/logger');
 
 /**
  * Determines if a URL path matches a known route
- * @param {*} path - The URL path to match. Any value is accepted: a non-string
- *   argument is treated as no match rather than raising an error.
+ * @param {string} path - The URL path to match
  * @returns {function|null} Handler function if route matches, null otherwise
  */
 function matchRoute(path) {
-  // url.parse can yield a null pathname (an empty request URL does), so a
-  // non-string path resolves to no match and reaches the caller's fixed 404.
-  if (typeof path !== 'string') {
-    return null;
-  }
-
-  // Normalize the path by removing one trailing slash
+  // Normalize the path by removing trailing slashes
   const normalizedPath = path.endsWith('/') && path.length > 1 
     ? path.slice(0, -1) 
     : path;
   
+  // Check if the path matches the welcome endpoint
   if (normalizedPath === ROUTES.WELCOME) {
     return handleWelcomeRequest;
   }
   
+  // No match found
   return null;
 }
 
 /**
  * Routes incoming HTTP requests to the appropriate handler based on the URL path
- *
- * Caller contract: `req.url` must be a string, which Node's http server always
- * sets. A non-string request target propagates the ERR_INVALID_ARG_TYPE raised
- * by url.parse rather than producing a response, so a caller that does not get
- * its request from the http server must validate the target before dispatching.
- * A null pathname is handled: it matches no route and answers 404.
  * @param {object} req - The HTTP request object
- * @param {string} req.url - Request target; only its pathname selects the handler
  * @param {object} res - The HTTP response object
  */
 function route(req, res) {
+  // Log the incoming request
   logger.request(req);
   
+  // Parse the URL from the request
   const parsedUrl = url.parse(req.url);
   
+  // Extract the pathname from the parsed URL
   const pathname = parsedUrl.pathname;
   
+  // Find the matching route handler
   const handler = matchRoute(pathname);
   
   if (handler) {
+    // If a handler is found, call it with the request and response objects
     logger.info(`Routing to handler for path: ${pathname}`);
     handler(req, res);
   } else {
+    // If no handler is found, return a 404 Not Found response
     logger.info(`No handler found for path: ${pathname}`);
     handle404(res);
   }
 }
 
+// Export the route function as the default export
 module.exports = route;

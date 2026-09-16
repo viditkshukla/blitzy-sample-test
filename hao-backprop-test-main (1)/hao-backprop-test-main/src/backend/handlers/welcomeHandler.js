@@ -67,8 +67,8 @@ function handleWelcomeRequest(req, res) {
     // Set Content-Type header to text/html with an explicit charset
     res.setHeader(HEADERS.CONTENT_TYPE, HEADERS.CONTENT_TYPE_HTML);
     
-    // Send the Welcome screen as the response body. Node derives Content-Length
-    // from this single res.end() call, so no length header is set here.
+    // Send the Welcome screen as the response body. Node derives the response
+    // length from this single res.end() call, so no length header is set here.
     res.end(renderWelcomePage());
     
     // Log the successful response

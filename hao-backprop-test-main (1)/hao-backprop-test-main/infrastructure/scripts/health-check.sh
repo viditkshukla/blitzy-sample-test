@@ -1,14 +1,14 @@
 #!/bin/bash
 #
 # Health check script for Node.js Hello World application
-# This script verifies that the /hello endpoint returns the expected response
+# This script verifies that the /welcome endpoint returns the expected response
 # and status code, indicating that the application is functioning correctly.
 
 # Default configuration values
 HOST="localhost"
 PORT="3000"
-ENDPOINT="/hello"
-EXPECTED_RESPONSE="Hello world"
+ENDPOINT="/welcome"
+EXPECTED_RESPONSE="Welcome to HelloGHES"
 EXPECTED_STATUS="200"
 TIMEOUT="5"
 VERBOSE="false"

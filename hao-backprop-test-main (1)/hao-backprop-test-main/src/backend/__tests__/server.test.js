@@ -33,19 +33,17 @@ describe('createServer', () => {
   let mockServer;
 
   beforeEach(() => {
-    // Reset all mocks
     jest.clearAllMocks();
-    
+
     // Create a mock server object with required methods
     mockServer = {
       on: jest.fn(),
       listen: jest.fn((port, host, callback) => callback()),
       close: jest.fn(callback => callback())
     };
-    
-    // Mock http.createServer
+
     jest.spyOn(http, 'createServer').mockReturnValue(mockServer);
-    
+
     // Mock logger functions
     jest.spyOn(logger, 'logServerStart').mockImplementation(() => {});
     jest.spyOn(logger, 'logServerStop').mockImplementation(() => {});
@@ -53,9 +51,8 @@ describe('createServer', () => {
   });
 
   afterEach(() => {
-    // Restore all mocks
     jest.restoreAllMocks();
-    
+
     // Close any open server instances
     if (testServer && testServer.close) {
       testServer.close();
@@ -63,29 +60,29 @@ describe('createServer', () => {
   });
 
   test('should create an HTTP server with the correct request handler', async () => {
-    // Start server which internally creates the HTTP server
-    await startServer();
-    
-    // Assert http.createServer was called with a function
-    expect(http.createServer).toHaveBeenCalledWith(expect.any(Function));
-    
-    // Assert server has been returned
-    expect(mockServer).toBeDefined();
+    const startedServer = await startServer();
+
+    expect(http.createServer).toHaveBeenCalledTimes(1);
+
+    // server.js keeps handleRequest private, so the handler it passes is
+    // identified by name and (req, res) arity rather than by reference.
+    const [requestHandler] = http.createServer.mock.calls[0];
+    expect(typeof requestHandler).toBe('function');
+    expect(requestHandler.name).toBe('handleRequest');
+    expect(requestHandler).toHaveLength(2);
+
+    expect(startedServer).toBe(mockServer);
   });
 
   test('should handle errors on the server', async () => {
-    // Start server to create and configure server instance
     await startServer();
-    
-    // Assert error handler was registered
+
     expect(mockServer.on).toHaveBeenCalledWith('error', expect.any(Function));
-    
-    // Simulate an error event
+
     const error = new Error('Test server error');
     const errorHandler = mockServer.on.mock.calls.find(call => call[0] === 'error')[1];
     errorHandler(error);
-    
-    // Assert that logger.error was called with the error
+
     expect(logger.error).toHaveBeenCalledWith('Server error', error);
   });
 });
@@ -113,33 +110,55 @@ describe('startServer', () => {
 
   test('should start the server on the configured port and host', async () => {
     const server = await startServer();
-    
-    // Assert server.listen was called with correct parameters
+
     expect(mockServer.listen).toHaveBeenCalledWith(
       PORT,
       HOST,
       expect.any(Function)
     );
-    
-    // Assert logger was called with the correct parameters
+
     expect(logger.logServerStart).toHaveBeenCalledWith(HOST, PORT);
-    
-    // Assert the returned promise resolves to the server instance
+
     expect(server).toBe(mockServer);
+  });
+
+  test('should apply bounded timeouts and a connection ceiling before listening', async () => {
+    let limitsWhenListening;
+
+    mockServer.listen.mockImplementation((port, host, callback) => {
+      limitsWhenListening = {
+        requestTimeout: mockServer.requestTimeout,
+        headersTimeout: mockServer.headersTimeout,
+        keepAliveTimeout: mockServer.keepAliveTimeout,
+        maxConnections: mockServer.maxConnections
+      };
+      callback();
+    });
+
+    await startServer();
+
+    // SERVER_LIMITS is module-private in server.js, so the contracted bounds
+    // are stated here. Capturing them inside listen is what proves they are
+    // in force before the first connection can be accepted.
+    expect(limitsWhenListening).toEqual({
+      requestTimeout: 30000,
+      headersTimeout: 10000,
+      keepAliveTimeout: 5000,
+      maxConnections: 512
+    });
+    expect(limitsWhenListening.headersTimeout)
+      .toBeLessThan(limitsWhenListening.requestTimeout);
   });
 
   test('should reject the promise if server fails to start', async () => {
     const startError = new Error('Failed to start server');
-    
-    // Make listen method call callback with an error
+
     mockServer.listen.mockImplementation((port, host, callback) => {
       callback(startError);
     });
-    
-    // Assert startServer rejects with the error
+
     await expect(startServer()).rejects.toThrow(startError);
-    
-    // Assert error was logged
+
     expect(logger.error).toHaveBeenCalledWith('Error starting server', startError);
   });
 });
@@ -147,16 +166,25 @@ describe('startServer', () => {
 describe('stopServer', () => {
   let mockServer;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
-    
+
     mockServer = {
+      on: jest.fn(),
+      listen: jest.fn((port, host, callback) => callback()),
       close: jest.fn(callback => callback()),
       listening: true
     };
-    
+
+    jest.spyOn(http, 'createServer').mockReturnValue(mockServer);
+    jest.spyOn(logger, 'logServerStart').mockImplementation(() => {});
     jest.spyOn(logger, 'logServerStop').mockImplementation(() => {});
     jest.spyOn(logger, 'error').mockImplementation(() => {});
+
+    // stopServer() takes no parameters and acts on server.js's module-level
+    // instance, so the mock has to be installed there by starting it. Without
+    // this the per-test close behaviour below would never be reached.
+    await startServer();
   });
 
   afterEach(() => {
@@ -164,36 +192,35 @@ describe('stopServer', () => {
   });
 
   test('should stop the server gracefully', async () => {
-    await stopServer(mockServer);
-    
-    // Assert server.close was called
+    await stopServer();
+
     expect(mockServer.close).toHaveBeenCalled();
-    
-    // Assert logger was called
+
     expect(logger.logServerStop).toHaveBeenCalled();
   });
 
   test('should reject the promise if server fails to stop', async () => {
     const closeError = new Error('Failed to close server');
-    
-    // Make close method call callback with an error
+
+    // The mock is the module-level server started above, so overriding its
+    // close callback here is the failure the production stopServer() sees.
     mockServer.close.mockImplementation(callback => {
       callback(closeError);
     });
-    
-    // Assert stopServer rejects with the error
-    await expect(stopServer(mockServer)).rejects.toThrow(closeError);
-    
-    // Assert error was logged
+
+    await expect(stopServer()).rejects.toThrow(closeError);
+
     expect(logger.error).toHaveBeenCalledWith('Error stopping server', closeError);
   });
 });
 
 describe('request handling', () => {
   beforeEach(async () => {
-    // Restore original modules for these integration tests
+    // Restore spies before starting the real server. This undoes the lifecycle
+    // blocks' jest.spyOn calls; the hoisted welcomeHandler module mock is not
+    // affected by it and stays in place.
     jest.restoreAllMocks();
-    
+
     // Start a real server for request testing
     testServer = await startServer();
   });
@@ -207,7 +234,6 @@ describe('request handling', () => {
   });
 
   afterEach(async () => {
-    // Stop the server after each test
     if (testServer) {
       await stopServer(testServer);
     }
@@ -274,8 +300,7 @@ describe('request handling', () => {
   test('should set security headers on responses', async () => {
     const response = await request(testServer)
       .get('/welcome');
-      
-    // Assert security headers are set
+
     expect(response.headers['x-content-type-options']).toBe('nosniff');
     expect(response.headers['x-frame-options']).toBe('DENY');
     expect(response.headers['content-security-policy']).toBe("default-src 'none'");

@@ -2,7 +2,7 @@
  * Unit tests for the Welcome Endpoint Handler
  *
  * Tests verify that the handler serves the Welcome screen for GET requests
- * and rejects non-GET methods with 405 Method Not Allowed responses.
+ * and delegates non-GET methods to the shared 405 handler.
  */
 
 // Import the handler function to test
@@ -11,6 +11,7 @@ const { handleWelcomeRequest } = require('../../handlers/welcomeHandler');
 // Import constants for assertions
 const {
   HTTP_STATUS,
+  ROUTES,
   MESSAGES,
   HEADERS,
   HTTP_METHODS
@@ -22,28 +23,23 @@ const { handle405 } = require('../../errorHandler');
 // Import logger for mocking
 const logger = require('../../utils/logger');
 
-// Mock the error handler module
 jest.mock('../../errorHandler', () => ({
   handle405: jest.fn()
 }));
 
-// Mock the logger module. The handler logs the request and the successful
-// response through info and rejects unsupported methods through warn; error is
-// mocked as well so the suite can assert the rejection never reaches it.
+// Mock the logger module. The handler records the request and the successful
+// response through info, and reports an unsupported method through error;
+// handle405 performs the rejection itself.
 jest.mock('../../utils/logger', () => ({
   info: jest.fn(),
-  warn: jest.fn(),
   error: jest.fn()
 }));
 
 describe('handleWelcomeRequest', () => {
-  // Define mock objects
   let req;
   let res;
 
-  // Setup before each test
   beforeEach(() => {
-    // Create mock request object
     req = {
       method: 'GET' // Default to GET method
     };
@@ -56,27 +52,21 @@ describe('handleWelcomeRequest', () => {
     };
   });
 
-  // Cleanup after each test
   afterEach(() => {
     // Reset all mocks to ensure test isolation
     jest.resetAllMocks();
   });
 
-  // Test case for GET requests
   it('should return 200 OK with the Welcome screen for GET requests', () => {
-    // Call the handler with mock request and response
     handleWelcomeRequest(req, res);
 
-    // Verify response status code was set to 200 OK
     expect(res.statusCode).toBe(HTTP_STATUS.OK);
 
-    // Verify Content-Type header was set to HTML with an explicit charset
     expect(res.setHeader).toHaveBeenCalledWith(
       HEADERS.CONTENT_TYPE,
       HEADERS.CONTENT_TYPE_HTML
     );
 
-    // Verify the response body carries the heading and the description
     const body = res.end.mock.calls[0][0];
     expect(body).toContain(MESSAGES.WELCOME_HEADING);
     expect(body).toContain(MESSAGES.WELCOME_DESCRIPTION);
@@ -86,20 +76,17 @@ describe('handleWelcomeRequest', () => {
     // pinned here rather than merely asserted to have happened.
     expect(logger.info).toHaveBeenNthCalledWith(
       1,
-      `Handling ${HTTP_METHODS.GET} request to /welcome endpoint`
+      `Handling ${HTTP_METHODS.GET} request to ${ROUTES.WELCOME} endpoint`
     );
     expect(logger.info).toHaveBeenNthCalledWith(
       2,
       `Successfully responded with ${HTTP_STATUS.OK} OK and the Welcome screen`
     );
 
-    // Verify handle405 was not called
     expect(handle405).not.toHaveBeenCalled();
   });
 
-  // Test case for the served markup
   it('should serve a self-contained document with no subresources or inline styles', () => {
-    // Call the handler with mock request and response
     handleWelcomeRequest(req, res);
 
     // Capture the markup passed to res.end
@@ -120,15 +107,11 @@ describe('handleWelcomeRequest', () => {
     expect(body).not.toContain('<link');
   });
 
-  // Test case for non-GET requests
   it('should call handle405 for non-GET requests', () => {
-    // Set request method to POST
     req.method = 'POST';
 
-    // Call the handler with mock request and response
     handleWelcomeRequest(req, res);
 
-    // Verify handle405 was called with the response object
     expect(handle405).toHaveBeenCalledWith(res);
 
     // Verify response status and headers were not set directly
@@ -137,17 +120,17 @@ describe('handleWelcomeRequest', () => {
     expect(res.setHeader).not.toHaveBeenCalled();
     expect(res.end).not.toHaveBeenCalled();
 
-    // Verify the request was logged and the rejection was reported at WARN,
-    // the level for routine client misuse. Asserting error was never called
-    // keeps a 405 out of error alerting.
-    expect(logger.info).toHaveBeenCalledWith('Handling POST request to /welcome endpoint');
-    expect(logger.warn).toHaveBeenCalledWith(
+    // Verify the request was logged and the unsupported method was reported
+    // through error, the level carried over from the handler this module
+    // replaces. handle405 performs the rejection itself.
+    expect(logger.info).toHaveBeenCalledWith(
+      `Handling POST request to ${ROUTES.WELCOME} endpoint`
+    );
+    expect(logger.error).toHaveBeenCalledWith(
       `Received unsupported POST method, expected ${HTTP_METHODS.GET}`
     );
-    expect(logger.error).not.toHaveBeenCalled();
   });
 
-  // Test case for isGetMethod function behavior
   it('should correctly identify GET method', () => {
     // Test the behavior of isGetMethod indirectly through handleWelcomeRequest
 

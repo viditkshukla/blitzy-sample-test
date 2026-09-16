@@ -24,9 +24,8 @@ HEALTH_CHECK_INTERVAL="3"
 DEPLOYMENT_ENV="development"
 VERBOSE="false"
 
-# Display usage information
 print_usage() {
-    echo "Usage: $(basename "$0") [OPTIONS]"
+    echo "Usage: bash ./$(basename "$0") [OPTIONS]"
     echo "Deploys the Node.js Hello World application to the specified environment."
     echo
     echo "Options:"
@@ -36,51 +35,44 @@ print_usage() {
     echo "  -h, --help          Display this help message and exit"
     echo
     echo "Examples:"
-    echo "  $(basename "$0")"
-    echo "  $(basename "$0") --env production"
-    echo "  $(basename "$0") -e staging -v"
+    echo "  bash ./$(basename "$0")"
+    echo "  bash ./$(basename "$0") --env production"
+    echo "  bash ./$(basename "$0") -e staging -v"
 }
 
-# Log info message with timestamp
 log_info() {
     local timestamp
     timestamp=$(date "+%Y-%m-%d %H:%M:%S")
     echo "[INFO] [$timestamp] $1"
 }
 
-# Log error message with timestamp
 log_error() {
     local timestamp
     timestamp=$(date "+%Y-%m-%d %H:%M:%S")
     echo "[ERROR] [$timestamp] $1" >&2
 }
 
-# Log verbose message if verbose mode is enabled
 log_verbose() {
     if [ "$VERBOSE" = "true" ]; then
         log_info "$1"
     fi
 }
 
-# Check if required tools are installed
 check_prerequisites() {
     log_info "Checking prerequisites..."
     
-    # Check Docker
     if ! command -v docker >/dev/null 2>&1; then
         log_error "Docker is not installed. Please install Docker and try again."
         return 1
     fi
     log_verbose "Docker is installed."
     
-    # Check Docker Compose
     if ! command -v docker-compose >/dev/null 2>&1; then
         log_error "Docker Compose is not installed. Please install Docker Compose and try again."
         return 1
     fi
     log_verbose "Docker Compose is installed."
     
-    # Check curl
     if ! command -v curl >/dev/null 2>&1; then
         log_error "curl is not installed. Please install curl and try again."
         return 1
@@ -102,7 +94,6 @@ check_prerequisites() {
     return 0
 }
 
-# Parse command line arguments
 parse_arguments() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -146,7 +137,6 @@ parse_arguments() {
     return 0
 }
 
-# Set up the deployment environment
 setup_environment() {
     log_info "Setting up environment for $DEPLOYMENT_ENV deployment..."
     
@@ -187,17 +177,14 @@ setup_environment() {
     return 0
 }
 
-# Build Docker image
 build_docker_image() {
     log_info "Building Docker image $DOCKER_IMAGE..."
     
-    # Change to the backend directory
     cd "$BACKEND_DIR" || {
         log_error "Failed to change to backend directory: $BACKEND_DIR"
         return 1
     }
     
-    # Build the Docker image
     if docker build -t "$DOCKER_IMAGE" -t "$DOCKER_LATEST" .; then
         log_info "Docker image built successfully."
         return 0
@@ -207,20 +194,20 @@ build_docker_image() {
     fi
 }
 
-# Deploy with Docker Compose
 deploy_with_docker_compose() {
     log_info "Deploying application with Docker Compose..."
     
-    # Change to infrastructure directory
     cd "$INFRA_DIR" || {
         log_error "Failed to change to infrastructure directory: $INFRA_DIR"
         return 1
     }
     
-    # Export environment variables for docker-compose
+    # Unused legacy exports: no Compose file in the repository interpolates
+    # APP_NAME, APP_VERSION, APP_PORT or NODE_ENV, and Compose is invoked below
+    # from $INFRA_DIR, which holds no Compose file at all. Kept until the
+    # Compose integration is fixed.
     export APP_NAME APP_VERSION APP_PORT NODE_ENV
     
-    # Run docker-compose up
     if docker-compose up -d; then
         log_info "Application deployed successfully."
         return 0
@@ -230,7 +217,6 @@ deploy_with_docker_compose() {
     fi
 }
 
-# Verify deployment
 verify_deployment() {
     log_info "Verifying deployment..."
     
@@ -255,11 +241,11 @@ verify_deployment() {
     return 1
 }
 
-# Cleanup after deployment
 cleanup() {
     log_info "Performing post-deployment cleanup..."
     
-    # Remove any temporary files
+    # Temporary-file cleanup is unimplemented: the message below is emitted in
+    # verbose mode although no temporary file is removed here.
     log_verbose "Removing temporary files..."
     
     # Optionally remove old Docker images
@@ -278,17 +264,14 @@ cleanup() {
     return 0
 }
 
-# Rollback deployment in case of failure
 rollback_deployment() {
     log_error "Deployment failed. Rolling back..."
     
-    # Change to infrastructure directory
     cd "$INFRA_DIR" || {
         log_error "Failed to change to infrastructure directory: $INFRA_DIR"
         return 1
     }
     
-    # Stop and remove containers
     docker-compose down
     
     # Check if there's a previous version to roll back to
@@ -302,11 +285,15 @@ rollback_deployment() {
     if [ -n "$previous_version" ]; then
         log_info "Rolling back to previous version: $previous_version"
         
-        # Set the image to the previous version
+        # Rollback image selection is ineffective pending Compose interpolation:
+        # the only Compose file in the repository, infrastructure/local/docker-compose.yml,
+        # hard-codes "hello-world-app:latest" and interpolates no variables, so
+        # neither of these exports reaches the deployed image.
         export APP_VERSION="$previous_version"
         export DOCKER_IMAGE="$APP_NAME:$previous_version"
         
-        # Deploy the previous version
+        # Re-runs Compose, which redeploys that same hard-coded
+        # "hello-world-app:latest" image rather than "$previous_version".
         if docker-compose up -d; then
             log_info "Rollback successful."
             return 0
@@ -320,38 +307,32 @@ rollback_deployment() {
     fi
 }
 
-# Main function
 main() {
     log_info "Starting deployment of Node.js Hello World application..."
     
-    # Parse command line arguments
     parse_arguments "$@"
     if [ $? -ne 0 ]; then
         return 1
     fi
     
-    # Check prerequisites
     check_prerequisites
     if [ $? -ne 0 ]; then
         log_error "Prerequisite check failed. Aborting deployment."
         return 1
     fi
     
-    # Set up environment
     setup_environment
     if [ $? -ne 0 ]; then
         log_error "Environment setup failed. Aborting deployment."
         return 1
     fi
     
-    # Build Docker image
     build_docker_image
     if [ $? -ne 0 ]; then
         log_error "Docker image build failed. Aborting deployment."
         return 1
     fi
     
-    # Deploy with Docker Compose
     deploy_with_docker_compose
     if [ $? -ne 0 ]; then
         log_error "Deployment failed."
@@ -359,7 +340,6 @@ main() {
         return 1
     fi
     
-    # Verify deployment
     verify_deployment
     if [ $? -ne 0 ]; then
         log_error "Deployment verification failed."
@@ -367,13 +347,11 @@ main() {
         return 1
     fi
     
-    # Cleanup
     cleanup
     
     log_info "Deployment completed successfully!"
     return 0
 }
 
-# Execute main function with all script arguments
 main "$@"
 exit $?

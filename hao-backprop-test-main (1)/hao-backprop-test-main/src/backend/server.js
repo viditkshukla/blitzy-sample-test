@@ -9,8 +9,8 @@
  */
 
 // Import Node.js built-in modules
-const http = require('http'); // native
-const url = require('url'); // native
+const http = require('http');
+const url = require('url');
 
 // Import configurations
 const { PORT, HOST } = require('./config');
@@ -32,6 +32,34 @@ const { requestLogger, securityHeaders, applyMiddleware } = require('./middlewar
 let server = null;
 
 /**
+ * Bounded timeout and connection limits applied to the HTTP server.
+ *
+ * Node's own defaults allow a request five minutes to complete, a full minute
+ * to deliver its headers, and place no ceiling at all on concurrent sockets
+ * (maxConnections is unset), so slow or high-rate clients can occupy sockets
+ * and amplify access logging on those defaults alone. These explicit bounds
+ * cap how long one request may hold a socket and how many sockets the process
+ * accepts at once.
+ *
+ * HEADERS_TIMEOUT_MS is deliberately shorter than REQUEST_TIMEOUT_MS so an
+ * incomplete header block is dropped before the whole-request budget elapses,
+ * which is the slow-header case. KEEP_ALIVE_TIMEOUT_MS is stated explicitly so
+ * the idle-socket budget is pinned by this module rather than inherited from
+ * whichever runtime version is in use.
+ *
+ * What these bound is per-connection cost and total concurrency. The rate at
+ * which an individual client may issue requests is not bounded here: this
+ * service answers every request it accepts, and throttling a caller is an edge
+ * concern that sits in front of the process rather than inside it.
+ */
+const SERVER_LIMITS = Object.freeze({
+  REQUEST_TIMEOUT_MS: 30000,
+  HEADERS_TIMEOUT_MS: 10000,
+  KEEP_ALIVE_TIMEOUT_MS: 5000,
+  MAX_CONNECTIONS: 512
+});
+
+/**
  * Creates a mapping of URL paths to their handler functions
  * 
  * @returns {Object} Object mapping paths to handler functions
@@ -49,23 +77,14 @@ function createRoutes() {
  * @param {Object} res - HTTP response object
  */
 function routeRequest(req, res) {
-  // Parse the URL from the request
   const parsedUrl = url.parse(req.url, true);
-  
-  // Extract the pathname from the parsed URL
   const pathname = parsedUrl.pathname;
-  
-  // Get the routes mapping
   const routes = createRoutes();
-  
-  // Get the handler for this path, if it exists
   const handler = routes[pathname];
-  
-  // If a handler exists for this path, call it
+
   if (handler) {
     handler(req, res);
   } else {
-    // Otherwise, handle as a 404 Not Found
     handleNotFound(req, res);
   }
 }
@@ -78,13 +97,9 @@ function routeRequest(req, res) {
  */
 function handleRequest(req, res) {
   try {
-    // Create an array of middleware functions
     const middlewares = [requestLogger, securityHeaders];
-    
-    // Apply middleware to the routeRequest function
     const handler = applyMiddleware(routeRequest, middlewares);
-    
-    // Call the enhanced handler
+
     handler(req, res);
   } catch (err) {
     // Handle any errors that occur during request processing
@@ -95,26 +110,29 @@ function handleRequest(req, res) {
 /**
  * Creates and starts the HTTP server on the specified host and port
  * 
+ * The SERVER_LIMITS bounds are applied to the server before it begins
+ * listening, so no connection is ever accepted on the runtime's unbounded
+ * defaults.
+ *
  * @returns {Promise<http.Server>} Promise that resolves with the server instance when started
  */
 function startServer() {
   return new Promise((resolve, reject) => {
     try {
-      // Create an HTTP server with the handleRequest function
       server = http.createServer(handleRequest);
-      
-      // Handle server errors
+
+      server.requestTimeout = SERVER_LIMITS.REQUEST_TIMEOUT_MS;
+      server.headersTimeout = SERVER_LIMITS.HEADERS_TIMEOUT_MS;
+      server.keepAliveTimeout = SERVER_LIMITS.KEEP_ALIVE_TIMEOUT_MS;
+      server.maxConnections = SERVER_LIMITS.MAX_CONNECTIONS;
+
       server.on('error', (err) => {
         error('Server error', err);
         reject(err);
       });
-      
-      // Start listening on the specified host and port
+
       server.listen(PORT, HOST, () => {
-        // Log successful server start
         logServerStart(HOST, PORT);
-        
-        // Resolve the promise with the server instance
         resolve(server);
       });
     } catch (err) {
@@ -133,13 +151,11 @@ function startServer() {
 function stopServer() {
   return new Promise((resolve, reject) => {
     try {
-      // If server is null or not listening, resolve immediately
       if (!server || !server.listening) {
         resolve();
         return;
       }
-      
-      // Close the server
+
       server.close((err) => {
         if (err) {
           // Log and reject if an error occurred during shutdown
@@ -147,14 +163,9 @@ function stopServer() {
           reject(err);
           return;
         }
-        
-        // Log successful server stop
+
         logServerStop();
-        
-        // Reset server reference
         server = null;
-        
-        // Resolve the promise
         resolve();
       });
     } catch (err) {
@@ -165,7 +176,6 @@ function stopServer() {
   });
 }
 
-// Export the server functions
 module.exports = {
   startServer,
   stopServer

@@ -82,7 +82,6 @@ const HTTP_METHODS = {
   GET: 'GET'
 };
 
-// Export all constants for use throughout the application
 module.exports = {
   HTTP_STATUS,
   ROUTES,

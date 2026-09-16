@@ -1,23 +1,23 @@
 # Use Node.js 18 with Alpine Linux as the base image for a minimal footprint
-# Node.js version: 18.x LTS
+# Node.js 18 is EOL: this tag receives no further security updates. Upgrading the base
+# image is outside this change's scope and is handled as a separately scoped upgrade.
 FROM node:18-alpine
 
-# Set the working directory in the container
 WORKDIR /app
 
-# Copy package.json and package-lock.json to leverage Docker cache
+# Dependency layer. Copying the manifests ahead of the source would let Docker cache the
+# install across source-only changes, and npm ci would give a lockfile-pinned, deterministic
+# install. Neither takes effect today: this build context (src/backend/) contains no
+# package.json and no package-lock.json, so the COPY below matches no file and npm ci then
+# refuses to run without a lockfile, failing the build. Supplying the backend manifest and
+# lockfile — repairing the container build — is outside this change's scope.
 COPY package*.json ./
 
-# Install only production dependencies for smaller image size
-# Uses npm ci for deterministic builds instead of npm install
 RUN npm ci --only=production
 
-# Copy the application code to the container
 COPY . .
 
-# Document that the container listens on port 3000
 EXPOSE 3000
 
-# Command to run the application
 # Uses the array syntax for proper signal handling
 CMD ["node", "index.js"]

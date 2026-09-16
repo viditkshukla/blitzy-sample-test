@@ -15,7 +15,8 @@ Before using the infrastructure components, ensure you have the following instal
 
 ```
 infrastructure/
-├── docker-compose.yml         # Docker Compose configuration
+├── local/
+│   └── docker-compose.yml     # Docker Compose configuration
 ├── monitoring/
 │   ├── prometheus.yml         # Prometheus configuration
 │   └── grafana-dashboard.json # Grafana dashboard configuration
@@ -33,14 +34,15 @@ The application can be deployed in several ways, depending on your needs and env
 For local development and testing, you can run the application directly with Node.js:
 
 ```bash
-# Navigate to the backend directory
 cd ../src/backend
 
-# Install dependencies
-npm install
+# No manifest declares the application's dependencies, so install its one
+# runtime dependency explicitly; --no-save leaves package.json unchanged
+npm install --no-save dotenv@16.0.3
 
-# Start the application
-npm start
+# No "start" script is defined, and npm start would fall back to the unrelated
+# root server.js demo, so run the backend entry point directly
+node index.js
 ```
 
 The application will be available at http://localhost:3000/welcome.
@@ -50,10 +52,10 @@ The application will be available at http://localhost:3000/welcome.
 To deploy the application as a standalone Docker container:
 
 ```bash
-# Build the Docker image
+# The build fails until src/backend carries a manifest: its Dockerfile copies
+# package*.json and runs npm ci, and neither file exists in that directory
 docker build -t hello-node:latest ../src/backend
 
-# Run the container
 docker run -p 3000:3000 -d --name hello-node hello-node:latest
 ```
 
@@ -71,8 +73,10 @@ docker rm hello-node
 For a more complete deployment with monitoring, use Docker Compose:
 
 ```bash
-# Start all services
-docker-compose up -d
+# The Compose file lives in local/, so its path is passed explicitly; it defines
+# the single application service, which builds the root Dockerfile and is
+# blocked by the same missing src/backend manifest
+docker-compose -f local/docker-compose.yml up -d
 ```
 
 This will start:
@@ -83,7 +87,7 @@ This will start:
 To stop all services:
 
 ```bash
-docker-compose down
+docker-compose -f local/docker-compose.yml down
 ```
 
 ### Using the Deployment Script
@@ -91,20 +95,20 @@ docker-compose down
 For convenience, a deployment script is provided that handles different deployment methods:
 
 ```bash
-# Deploy using Docker
-./scripts/deploy.sh --method docker
+# deploy.sh exposes only --env (development|staging|production), --verbose and
+# --help; its pipeline is fixed: build the image, then Docker Compose, then the
+# health check. It aborts at its prerequisite check until health-check.sh is
+# executable (chmod +x scripts/health-check.sh)
+bash ./scripts/deploy.sh --env development
 
-# Deploy using Docker Compose
-./scripts/deploy.sh --method docker-compose
-
-# Deploy locally
-./scripts/deploy.sh --method local
+# The same deployment with verbose logging
+bash ./scripts/deploy.sh --env production --verbose
 ```
 
 For more options:
 
 ```bash
-./scripts/deploy.sh --help
+bash ./scripts/deploy.sh --help
 ```
 
 ## Monitoring
@@ -144,13 +148,13 @@ A health check script is provided to verify that the application is running corr
 
 ```bash
 # Basic health check
-./scripts/health-check.sh
+bash ./scripts/health-check.sh
 
 # Health check with custom host and port
-./scripts/health-check.sh --host localhost --port 3000
+bash ./scripts/health-check.sh --host localhost --port 3000
 
 # Verbose health check
-./scripts/health-check.sh --verbose
+bash ./scripts/health-check.sh --verbose
 ```
 
 The script checks if the `/welcome` endpoint returns "Welcome to HelloGHES" with a 200 OK status code.
@@ -193,8 +197,8 @@ npm update
 After making changes to the application code or dependencies, rebuild the containers:
 
 ```bash
-docker-compose build
-docker-compose up -d
+docker-compose -f local/docker-compose.yml build
+docker-compose -f local/docker-compose.yml up -d
 ```
 
 ## Troubleshooting
@@ -203,7 +207,7 @@ docker-compose up -d
 
 1. Check if the container is running: `docker ps`
 2. Check container logs: `docker logs hello-world-app`
-3. Run the health check script: `./scripts/health-check.sh --verbose`
+3. Run the health check script: `bash ./scripts/health-check.sh --verbose`
 
 ### Monitoring Not Working
 

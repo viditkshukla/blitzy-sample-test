@@ -10,27 +10,11 @@
  */
 
 // Import dependencies
-const { logRequest, warn, error } = require('../utils/logger');
+const { logRequest, error } = require('../utils/logger');
 const { handleServerError } = require('../handlers/error');
 
 /**
  * Middleware that logs information about HTTP requests and responses
- * 
- * Exactly one access record is emitted per exchange, and it is emitted from the
- * response's own completion rather than from the invocation of `res.end`:
- * the completed-request line is written by a `finish` listener, so a response
- * that never finished is never reported as completed, and the measured duration
- * spans the whole exchange including the time Node spends flushing the body.
- * 
- * A connection torn down before the response completed emits `close` with no
- * preceding `finish`; that case is reported distinctly at warning level so an
- * aborted request stays visible in the log while remaining impossible to
- * mistake for a served response.
- * 
- * `requestLogger` is a public export, so a response object that is not an
- * EventEmitter — a plain object carrying only an `end` function — is still
- * supported: for those the original `end` is wrapped, called first, and the
- * record is emitted only after it has returned successfully.
  * 
  * @param {Object} req - HTTP request object
  * @param {Object} res - HTTP response object
@@ -40,72 +24,20 @@ function requestLogger(req, res, next) {
   // Record start time to calculate response time
   const startTime = Date.now();
   
-  // One record per exchange. On a normal response 'close' fires after 'finish',
-  // and an aborted connection can fire 'close' alone, so both listeners share
-  // this flag and each checks it before writing: whichever event arrives first
-  // produces the record and suppresses the other.
-  let recorded = false;
+  // Store the original end method
+  const originalEnd = res.end;
   
-  // Emits the completed-request access record through the logger utility, which
-  // keeps the status-based level routing. Any failure inside the logger is
-  // contained here because these calls run from an event listener, where an
-  // escaping exception would become an uncaught exception for the process.
-  function recordCompletedRequest() {
-    if (recorded) return;
-    recorded = true;
+  // Override the end method to log the request when it completes
+  res.end = function(chunk, encoding) {
+    // Calculate response time
+    const responseTime = Date.now() - startTime;
     
-    try {
-      logRequest(req, res, Date.now() - startTime);
-    } catch (err) {
-      error('Failed to log request', err);
-    }
-  }
-  
-  if (typeof res.once === 'function') {
-    // 'finish' is the response's own statement that it completed: the record
-    // written here describes a response that genuinely went out.
-    res.once('finish', recordCompletedRequest);
+    // Log the request using the logger utility
+    logRequest(req, res, responseTime);
     
-    // 'close' without a preceding 'finish' means the exchange ended early.
-    res.once('close', function() {
-      if (recorded) return;
-      recorded = true;
-      
-      // Keep the access-log field order recognisable (method, path, status,
-      // duration) but log only the path: a raw request URL would carry
-      // query-string values such as tokens or addresses into the process log.
-      const requestUrl = typeof req.url === 'string' ? req.url : '';
-      const queryStart = requestUrl.indexOf('?');
-      const requestPath = queryStart === -1
-        ? requestUrl
-        : requestUrl.slice(0, queryStart);
-      
-      try {
-        warn(
-          `${req.method} ${requestPath} ${res.statusCode} ` +
-          `${Date.now() - startTime}ms - response did not complete`
-        );
-      } catch (err) {
-        error('Failed to log prematurely closed request', err);
-      }
-    });
-  } else {
-    // Fallback for a response object that is not an EventEmitter. Store the
-    // original end method and wrap it so the original runs first: the record is
-    // written only once the response-ending operation has returned, so an `end`
-    // that throws produces no completed-request line here either.
-    const originalEnd = res.end;
-    
-    res.end = function(chunk, encoding) {
-      // Call the original end method with the same arguments and preserve its
-      // return value for callers that chain on it
-      const result = originalEnd.call(this, chunk, encoding);
-      
-      recordCompletedRequest();
-      
-      return result;
-    };
-  }
+    // Call the original end method with the same arguments
+    return originalEnd.call(this, chunk, encoding);
+  };
   
   // Continue to the next middleware or handler
   next();

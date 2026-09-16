@@ -2,8 +2,8 @@
  * Welcome Endpoint Handler module for Node.js Hello World application
  *
  * This module handles requests to the /welcome endpoint, validates HTTP methods,
- * and serves a self-contained Welcome screen for GET requests or error responses
- * for unsupported methods.
+ * and serves a self-contained HTML Welcome screen for GET requests or error
+ * responses for unsupported methods.
  */
 
 // Import required modules and constants
@@ -27,6 +27,10 @@ function isGetMethod(method) {
  * style, because the security middleware sends
  * `Content-Security-Policy: default-src 'none'` on every response.
  *
+ * Module-private and intentionally not exported: the module's public surface is
+ * its request handler alone.
+ *
+ * @private
  * @returns {string} The Welcome screen document
  */
 function renderWelcomePage() {
@@ -53,13 +57,10 @@ function renderWelcomePage() {
  * @param {object} res - The HTTP response object
  */
 function handleWelcomeRequest(req, res) {
-  // Log the incoming request
   logger.info(`Handling ${req.method} request to /welcome endpoint`);
 
-  // Extract the HTTP method from the request
   const method = req.method;
 
-  // Check if the method is GET
   if (isGetMethod(method)) {
     // Set status code to 200 (OK)
     res.statusCode = HTTP_STATUS.OK;
@@ -71,18 +72,15 @@ function handleWelcomeRequest(req, res) {
     // length from this single res.end() call, so no length header is set here.
     res.end(renderWelcomePage());
 
-    // Log the successful response
     logger.info(`Successfully responded with ${HTTP_STATUS.OK} OK and the Welcome screen`);
   } else {
-    // For non-GET requests, handle Method Not Allowed. An unsupported method is
-    // routine client misuse answered by a 405, not a service fault, so it is
-    // logged at WARN rather than ERROR to keep error alerting actionable.
-    logger.warn(`Received unsupported ${method} method, expected ${HTTP_METHODS.GET}`);
+    // For non-GET requests, delegate the Method Not Allowed response to the
+    // shared 405 handler.
+    logger.error(`Received unsupported ${method} method, expected ${HTTP_METHODS.GET}`);
     handle405(res);
   }
 }
 
-// Export the welcome endpoint handler function
 module.exports = {
   handleWelcomeRequest
 };

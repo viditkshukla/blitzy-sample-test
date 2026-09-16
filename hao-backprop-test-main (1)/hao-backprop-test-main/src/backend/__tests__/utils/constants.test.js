@@ -80,7 +80,7 @@ describe('MESSAGES', () => {
     expect(MESSAGES.SERVER_ERROR).toBe('Internal Server Error');
   });
 
-  test("should define SERVER_STARTED as 'Server running on port'", () => {
+  test("should define SERVER_STARTED as 'Server started on port %d'", () => {
     expect(MESSAGES.SERVER_STARTED).toBe('Server started on port %d');
   });
 });

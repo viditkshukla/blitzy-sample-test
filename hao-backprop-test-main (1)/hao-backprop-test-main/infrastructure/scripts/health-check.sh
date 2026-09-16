@@ -15,9 +15,8 @@ VERBOSE="false"
 EXIT_CODE_SUCCESS=0
 EXIT_CODE_FAILURE=1
 
-# Print usage information
 print_usage() {
-    echo "Usage: $(basename "$0") [OPTIONS]"
+    echo "Usage: bash infrastructure/scripts/health-check.sh [OPTIONS]"
     echo "Performs a health check on the Node.js Hello World application."
     echo
     echo "Options:"
@@ -28,34 +27,30 @@ print_usage() {
     echo "  --help           Display this help message and exit"
     echo
     echo "Examples:"
-    echo "  $(basename "$0")"
-    echo "  $(basename "$0") --host example.com --port 8080"
-    echo "  $(basename "$0") --verbose"
-    echo "  $(basename "$0") --timeout 10"
+    echo "  bash infrastructure/scripts/health-check.sh"
+    echo "  bash infrastructure/scripts/health-check.sh --host example.com --port 8080"
+    echo "  bash infrastructure/scripts/health-check.sh --verbose"
+    echo "  bash infrastructure/scripts/health-check.sh --timeout 10"
 }
 
-# Log an info message with timestamp
 log_info() {
     local timestamp
     timestamp=$(date "+%Y-%m-%d %H:%M:%S")
     echo "[INFO] [$timestamp] $1"
 }
 
-# Log an error message with timestamp
 log_error() {
     local timestamp
     timestamp=$(date "+%Y-%m-%d %H:%M:%S")
     echo "[ERROR] [$timestamp] $1" >&2
 }
 
-# Log a verbose message if verbose mode is enabled
 log_verbose() {
     if [ "$VERBOSE" = "true" ]; then
         log_info "$1"
     fi
 }
 
-# Parse command line arguments
 parse_arguments() {
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -119,7 +114,6 @@ check_prerequisites() {
     return 0
 }
 
-# Perform the health check
 perform_health_check() {
     log_info "Starting health check for $HOST:$PORT$ENDPOINT"
     
@@ -150,7 +144,6 @@ perform_health_check() {
     log_verbose "Received HTTP status code: $status_code"
     log_verbose "Received response body: '$response_body'"
     
-    # Check if status code matches expected status
     if [ "$status_code" != "$EXPECTED_STATUS" ]; then
         log_error "Health check failed: Expected status code $EXPECTED_STATUS, got $status_code"
         return 1
@@ -168,21 +161,17 @@ perform_health_check() {
     return 0
 }
 
-# Main function
 main() {
-    # Parse command line arguments
     parse_arguments "$@"
     if [ $? -ne 0 ]; then
         return $EXIT_CODE_FAILURE
     fi
     
-    # Check prerequisites
     check_prerequisites
     if [ $? -ne 0 ]; then
         return $EXIT_CODE_FAILURE
     fi
     
-    # Perform health check
     perform_health_check
     if [ $? -ne 0 ]; then
         return $EXIT_CODE_FAILURE
@@ -191,6 +180,5 @@ main() {
     return $EXIT_CODE_SUCCESS
 }
 
-# Run the main function with all script arguments
 main "$@"
 exit $?

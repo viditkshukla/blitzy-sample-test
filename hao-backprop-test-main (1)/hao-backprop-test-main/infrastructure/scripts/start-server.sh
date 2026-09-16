@@ -22,9 +22,8 @@ NODE_ENV=$DEFAULT_NODE_ENV
 DETACHED=false
 VERBOSE=false
 
-# Function to print usage information
 print_usage() {
-    echo "Usage: $(basename "$0") [OPTIONS]"
+    echo "Usage: bash ./start-server.sh [OPTIONS]"
     echo
     echo "Start the Node.js Hello World server with specified options."
     echo
@@ -36,14 +35,13 @@ print_usage() {
     echo "  -h, --help    Show this help message and exit"
     echo
     echo "Examples:"
-    echo "  $(basename "$0")                  # Start with default settings"
-    echo "  $(basename "$0") -p 8080          # Start on port 8080"
-    echo "  $(basename "$0") -e production    # Start in production environment"
-    echo "  $(basename "$0") -d               # Start in background"
-    echo "  $(basename "$0") -v               # Start with verbose logging"
+    echo "  bash ./start-server.sh                # Start with default settings"
+    echo "  bash ./start-server.sh -p 8080        # Start on port 8080"
+    echo "  bash ./start-server.sh -e production  # Start in production environment"
+    echo "  bash ./start-server.sh -d             # Start in background"
+    echo "  bash ./start-server.sh -v             # Start with verbose logging"
 }
 
-# Function to parse command line arguments
 parse_arguments() {
     while getopts ":p:e:dvh" opt; do
         case ${opt} in
@@ -85,7 +83,6 @@ parse_arguments() {
     done
 }
 
-# Function to log messages with timestamp
 log_message() {
     local level=$1
     local message=$2
@@ -104,27 +101,22 @@ log_message() {
     fi
 }
 
-# Function to check if all dependencies are available
 check_dependencies() {
     log_message "INFO" "Checking dependencies..."
     
-    # Check for Node.js
     if ! command -v node &> /dev/null; then
         log_message "ERROR" "Node.js is not installed. Please install Node.js and try again."
         return 1
     fi
     
-    # Check Node.js version
     local node_version=$(node -v | cut -d 'v' -f 2)
     log_message "INFO" "Found Node.js version $node_version"
     
-    # Check for npm
     if ! command -v npm &> /dev/null; then
         log_message "ERROR" "npm is not installed. Please install npm and try again."
         return 1
     fi
     
-    # Check if backend directory exists
     if [ ! -d "$BACKEND_DIR" ]; then
         log_message "ERROR" "Backend directory not found: $BACKEND_DIR"
         return 1
@@ -140,11 +132,9 @@ check_dependencies() {
     return 0
 }
 
-# Function to set up the environment
 setup_environment() {
     log_message "INFO" "Setting up environment..."
     
-    # Create logs directory if it doesn't exist
     if [ ! -d "$LOG_DIR" ]; then
         log_message "INFO" "Creating logs directory: $LOG_DIR"
         mkdir -p "$LOG_DIR"
@@ -154,14 +144,12 @@ setup_environment() {
         fi
     fi
     
-    # Check if .env file exists in backend directory
     if [ -f "$BACKEND_DIR/.env" ]; then
         log_message "INFO" "Found .env file in backend directory."
     else
         log_message "INFO" "No .env file found. Using default environment variables."
     fi
     
-    # Export environment variables
     export PORT=$PORT
     export NODE_ENV=$NODE_ENV
     
@@ -169,7 +157,6 @@ setup_environment() {
     return 0
 }
 
-# Function to check if port is available
 check_port_availability() {
     local port=$1
     local port_in_use=false
@@ -198,11 +185,9 @@ check_port_availability() {
     fi
 }
 
-# Function to start the server
 start_server() {
     log_message "INFO" "Starting server on port $PORT in $NODE_ENV mode..."
     
-    # Change to backend directory
     cd "$BACKEND_DIR" || {
         log_message "ERROR" "Failed to change to backend directory: $BACKEND_DIR"
         return 1
@@ -220,11 +205,9 @@ start_server() {
             log_message "INFO" "Starting server in detached mode with output to $LOG_FILE"
         fi
         
-        # Start in background
         nohup node "$server_file" > "$LOG_FILE" 2>&1 &
         local pid=$!
         
-        # Check if process is running
         if ps -p $pid > /dev/null; then
             echo $pid > "$PID_FILE"
             log_message "INFO" "Server started in background with PID: $pid"
@@ -237,7 +220,6 @@ start_server() {
             log_message "INFO" "Starting server in foreground mode"
         fi
         
-        # Start in foreground
         node "$server_file"
         if [ $? -ne 0 ]; then
             log_message "ERROR" "Server exited with an error."
@@ -248,9 +230,7 @@ start_server() {
     return 0
 }
 
-# Main function
 main() {
-    # Parse command line arguments
     parse_arguments "$@"
     
     # Print welcome message
@@ -266,14 +246,12 @@ main() {
         log_message "INFO" "  Verbose mode: $VERBOSE"
     fi
     
-    # Check dependencies
     check_dependencies
     if [ $? -ne 0 ]; then
         log_message "ERROR" "Dependency check failed. Cannot start server."
         return 1
     fi
     
-    # Set up environment
     setup_environment
     if [ $? -ne 0 ]; then
         log_message "ERROR" "Environment setup failed. Cannot start server."
@@ -283,7 +261,6 @@ main() {
     # Check port availability (non-blocking warning)
     check_port_availability "$PORT"
     
-    # Start the server
     start_server
     local start_result=$?
     
@@ -303,5 +280,4 @@ main() {
     return $start_result
 }
 
-# Execute main function with all script arguments
 main "$@"

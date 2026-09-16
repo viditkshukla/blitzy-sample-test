@@ -24,14 +24,17 @@ This project demonstrates fundamental Node.js web service concepts with minimal 
 ## Installation
 
 ```bash
-# Clone the repository (if you haven't already)
 git clone <repository-url>
-
-# Navigate to the backend directory
 cd src/backend
 
-# Install dependencies
-npm install
+# `npm install` on its own installs nothing: this directory has no package.json, so npm
+# resolves the root manifest, which declares no dependencies. Install the runtime dependency
+# (dotenv) and the test tooling explicitly; --no-save leaves package.json and
+# package-lock.json untouched, and node_modules is created at the project root, where Node's
+# upward resolution serves both the root and src/backend. jest.config.js configures jest-junit
+# as a reporter, so the runs below need it; pin 17.0.0 — jest-junit 9.0.0 through 16.0.0
+# resolve a uuid affected by GHSA-w5hq-g745-h8pq, while 17.0.0 audits clean.
+npm install --no-save jest@29.5.0 supertest@6.3.3 dotenv@16.0.3 jest-junit@17.0.0
 ```
 
 ## Configuration
@@ -63,11 +66,14 @@ A sample configuration file is provided as `.env.example`.
 ### Starting the Server
 
 ```bash
-# Start the server using the native HTTP implementation
-npm start
+# `npm start` is not defined: package.json declares no `start` script, so npm falls back to
+# its own default, `node server.js`, and launches the root demo server on port 3000 instead
+# of this service. Start the service directly; PORT, HOST, NODE_ENV and LOG_LEVEL are all
+# optional and default to 3000, 0.0.0.0, development and INFO.
+PORT=3000 node index.js
 
-# Start the server with automatic restart during development
-npm run dev
+# Automatic restart on change is unavailable: `npm run dev` is not defined in any manifest
+# and nodemon is not installed, so nodemon.json currently has nothing to drive it.
 ```
 
 ### Using the API
@@ -75,7 +81,6 @@ npm run dev
 Once the server is running, you can access the endpoint:
 
 ```bash
-# Using curl
 curl http://localhost:3000/welcome
 
 # Expected response
@@ -100,26 +105,32 @@ You can also access the endpoint in a web browser by navigating to `http://local
 src/backend/
 ├── __tests__/            # Test files
 │   ├── handlers/        # Handler tests
+│   ├── integration/     # Supertest endpoint contract tests
+│   ├── utils/           # Constants and logger tests
+│   ├── config.test.js   # Configuration tests
+│   ├── errorHandler.test.js # Shared error handler tests
+│   ├── index.test.js    # Entry point tests
+│   ├── router.test.js   # Standalone dispatcher tests
 │   ├── server.test.js   # Native HTTP server tests
-│   └── server-express.test.js # Express server tests
+│   └── setup.js         # Shared mocks, not loaded: jest.config.js sets no setupFiles
 ├── handlers/            # Request handlers
 │   ├── error.js         # Error handlers
 │   └── welcomeHandler.js  # Welcome endpoint handler
 ├── middleware/          # Middleware functions
 │   └── index.js         # Middleware definitions
 ├── utils/               # Utility functions
+│   ├── constants.js     # Route, message and header constants
 │   └── logger.js        # Logging utility
-├── .env.example         # Example environment variables
-├── .eslintrc.js         # ESLint configuration
+├── CHANGELOG.md         # Backend change history
 ├── config.js            # Application configuration
 ├── Dockerfile           # Docker configuration
+├── errorHandler.js      # Constants-driven 404/405/500 responses
 ├── index.js             # Application entry point
 ├── jest.config.js       # Jest test configuration
 ├── nodemon.json         # Nodemon configuration
-├── package.json         # Project dependencies and scripts
 ├── README.md            # This documentation file
-├── server.js            # Native HTTP server implementation
-└── server-express.js    # Express server implementation
+├── router.js            # Standalone dispatcher, not used by server.js
+└── server.js            # Native HTTP server implementation
 ```
 
 ## API Documentation
@@ -187,34 +198,46 @@ Method Not Allowed
 ### Running Tests
 
 ```bash
-# Run all tests
-npm test
+# `npm test` only runs the placeholder script in package.json, which prints
+# "Error: no test specified" and exits 1; `test:coverage` and `test:watch` are not defined at
+# all. Invoke Jest directly from this directory, after the --no-save install shown under
+# Installation. --runInBand is required because the server and integration suites both bind
+# the configured port and jest.config.js sets no maxWorkers.
 
-# Run tests with coverage report
-npm run test:coverage
+# Run the suites covering the /welcome endpoint and the shared error handlers. Exits 0.
+npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand \
+  --testPathPattern "(handlers/welcomeHandler|integration/api|utils/constants|errorHandler|handlers/error)"
 
-# Run tests in watch mode during development
-npm run test:watch
+# Run every suite. This exits 1: the config, index, router, server and utils/logger suites
+# carry pre-existing failures unrelated to the /welcome endpoint.
+npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand
+
+# Coverage report. handlers/welcomeHandler.js meets its 100% per-file threshold; the four
+# global thresholds are unmet while the suites above fail, so this also exits 1.
+npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand --coverage
+
+# Re-run on change. Interactive, so it does not exit on its own.
+npx jest --config jest.config.js --rootDir . --watch
 ```
 
 ### Linting
 
 ```bash
-# Run ESLint
-npm run lint
-
-# Fix automatically fixable issues
-npm run lint:fix
+# No lint gate exists: this repository contains no ESLint or Prettier configuration and
+# declares no lint dependency, so `npm run lint` and `npm run lint:fix` are not defined. The
+# available static check is a syntax pass over every source file in this directory tree.
+for f in $(find . -name '*.js' -not -path './node_modules/*' -not -path './coverage/*'); do node --check "$f" || echo "SYNTAX FAIL $f"; done
 ```
 
 ### Security Audit
 
 ```bash
-# Check for vulnerabilities
-npm run audit
-
-# Fix vulnerabilities when possible
-npm run audit:fix
+# `npm run audit` and `npm run audit:fix` are not defined. npm's built-in audit resolves the
+# root manifest from here and reports on declared dependencies only: package.json declares
+# none, so it audits the root package alone and reports no vulnerabilities. It does not cover
+# the packages installed with --no-save above: audit those by declaring the same four versions
+# in a scratch package.json outside this checkout and running `npm audit` there.
+npm audit
 ```
 
 ## Docker

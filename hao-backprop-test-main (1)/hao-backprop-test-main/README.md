@@ -38,26 +38,30 @@ For containerized deployment:
 ### Local Development
 
 ```bash
-# Clone the repository
 git clone <repository-url>
-
-# Navigate to the backend directory
 cd src/backend
 
-# Install dependencies
-npm install
+# `npm install` on its own installs nothing: this directory has no package.json, so npm
+# resolves the root manifest, which declares no dependencies. Install the runtime dependency
+# (dotenv) and the test tooling explicitly; --no-save leaves package.json and
+# package-lock.json untouched, and node_modules is created at the project root, where Node's
+# upward resolution serves both the root and src/backend. jest.config.js configures jest-junit
+# as a reporter, so the runs below need it; pin 17.0.0 — jest-junit 9.0.0 through 16.0.0
+# resolve a uuid affected by GHSA-w5hq-g745-h8pq, while 17.0.0 audits clean.
+npm install --no-save jest@29.5.0 supertest@6.3.3 dotenv@16.0.3 jest-junit@17.0.0
 ```
 
 ### Docker Installation
 
 ```bash
-# Clone the repository
 git clone <repository-url>
-
-# Navigate to the backend directory
 cd src/backend
 
-# Build the Docker image
+# This build cannot complete in the current repository. src/backend/Dockerfile copies
+# package*.json — a glob that matches nothing here, which Docker tolerates — and then runs
+# `npm ci`, which fails with npm error code EUSAGE ("can only install with an existing
+# package-lock.json"), because this directory holds no manifest and no lockfile. Supplying
+# them is outside the scope of this service; use the local start command under Usage instead.
 docker build -t node-hello-world .
 ```
 
@@ -90,30 +94,35 @@ A sample configuration file is provided as `.env.example` in the backend directo
 ### Starting the Server Locally
 
 ```bash
-# Navigate to the backend directory
 cd src/backend
 
-# Start the server using the native HTTP implementation
-npm start
+# `npm start` is not defined: package.json declares no `start` script, so npm falls back to
+# its own default, `node server.js`, and launches the root demo server on port 3000 instead
+# of this service. Start the service directly; PORT, HOST, NODE_ENV and LOG_LEVEL are all
+# optional and default to 3000, 0.0.0.0, development and INFO.
+PORT=3000 node index.js
 
-# Start the server with automatic restart during development
-npm run dev
+# Automatic restart on change is unavailable: `npm run dev` is not defined in any manifest
+# and nodemon is not installed, so nodemon.json currently has nothing to drive it.
 ```
 
 ### Running with Docker
 
 ```bash
-# Run the Docker container
 docker run -p 3000:3000 node-hello-world
 ```
 
 ### Running with Docker Compose (includes monitoring)
 
 ```bash
-# Navigate to the infrastructure directory
 cd infrastructure
 
-# Start all services (application, Prometheus, Grafana)
+# This stack does not come up in the current repository. The only Compose file lives one
+# level further down, at infrastructure/local/docker-compose.yml, so this command finds no
+# configuration here; that file defines a single application service and no Prometheus or
+# Grafana service; its build uses the root Dockerfile blocked above; and its
+# `command: npm run dev` names a script no manifest defines. Prometheus and Grafana are
+# configuration-only, under infrastructure/monitoring.
 docker-compose up -d
 ```
 
@@ -122,7 +131,6 @@ docker-compose up -d
 Once the server is running, you can access the endpoint:
 
 ```bash
-# Using curl
 curl http://localhost:3000/welcome
 
 # Expected response
@@ -144,13 +152,12 @@ You can also access the endpoint in a web browser by navigating to `http://local
 ## Project Structure
 
 ```
-├── .github/                # GitHub configuration files
-│   ├── workflows/         # GitHub Actions workflows
-│   └── ISSUE_TEMPLATE/    # Issue templates
 ├── infrastructure/        # Deployment and infrastructure files
+│   ├── local/             # Local Docker Compose stack
+│   │   └── docker-compose.yml # Docker Compose configuration
 │   ├── monitoring/        # Prometheus and Grafana configuration
 │   ├── scripts/           # Deployment and utility scripts
-│   └── docker-compose.yml # Docker Compose configuration
+│   └── README.md          # Infrastructure documentation
 ├── src/
 │   └── backend/           # Node.js application code
 │       ├── __tests__/     # Test files
@@ -158,11 +165,17 @@ You can also access the endpoint in a web browser by navigating to `http://local
 │       ├── middleware/    # Middleware functions
 │       ├── utils/         # Utility functions
 │       ├── config.js      # Application configuration
+│       ├── errorHandler.js # Shared 404/405/500 responses
 │       ├── index.js       # Application entry point
-│       ├── server.js      # Native HTTP server implementation
-│       └── server-express.js # Express server implementation
-├── .gitignore             # Git ignore file
+│       ├── router.js      # Standalone dispatcher, not used by server.js
+│       └── server.js      # Native HTTP server implementation
+├── CODE_OF_CONDUCT.md     # Contributor code of conduct
+├── CONTRIBUTING.md        # Contribution guidelines
+├── Dockerfile             # Docker build for the backend service
 ├── LICENSE                # MIT license file
+├── package.json           # Package manifest: no dependencies, placeholder test script
+├── package-lock.json      # Lockfile mirroring that empty dependency set
+├── server.js              # Standalone demo server, not the /welcome service
 └── README.md              # This documentation file
 ```
 
@@ -251,37 +264,48 @@ By default, the application uses the native HTTP implementation. To use the Expr
 ### Running Tests
 
 ```bash
-# Navigate to the backend directory
 cd src/backend
 
-# Run all tests
-npm test
+# `npm test` only runs the placeholder script in package.json, which prints
+# "Error: no test specified" and exits 1; `test:coverage` and `test:watch` are not defined at
+# all. Invoke Jest directly, after the --no-save install shown under Installation. --runInBand
+# is required because the server and integration suites both bind the configured port and
+# jest.config.js sets no maxWorkers.
 
-# Run tests with coverage report
-npm run test:coverage
+# Run the suites covering the /welcome endpoint and the shared error handlers. Exits 0.
+npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand \
+  --testPathPattern "(handlers/welcomeHandler|integration/api|utils/constants|errorHandler|handlers/error)"
 
-# Run tests in watch mode during development
-npm run test:watch
+# Run every suite. This exits 1: the config, index, router, server and utils/logger suites
+# carry pre-existing failures unrelated to the /welcome endpoint.
+npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand
+
+# Coverage report. handlers/welcomeHandler.js meets its 100% per-file threshold; the four
+# global thresholds are unmet while the suites above fail, so this also exits 1.
+npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand --coverage
+
+# Re-run on change. Interactive, so it does not exit on its own.
+npx jest --config jest.config.js --rootDir . --watch
 ```
 
 ### Linting
 
 ```bash
-# Run ESLint
-npm run lint
-
-# Fix automatically fixable issues
-npm run lint:fix
+# No lint gate exists: this repository contains no ESLint or Prettier configuration and
+# declares no lint dependency, so `npm run lint` and `npm run lint:fix` are not defined. The
+# available static check is a syntax pass over every source file, from the project root.
+for f in $(find src -name '*.js' -not -path '*/node_modules/*' -not -path '*/coverage/*'); do node --check "$f" || echo "SYNTAX FAIL $f"; done
 ```
 
 ### Security Audit
 
 ```bash
-# Check for vulnerabilities
-npm run audit
-
-# Fix vulnerabilities when possible
-npm run audit:fix
+# `npm run audit` and `npm run audit:fix` are not defined. npm's built-in audit runs from the
+# project root and reports on declared dependencies only: package.json declares none, so it
+# audits the root package alone and reports no vulnerabilities. It does not cover the
+# packages installed with --no-save above: audit those by declaring the same four versions in
+# a scratch package.json outside this checkout and running `npm audit` there.
+npm audit
 ```
 
 ## Monitoring

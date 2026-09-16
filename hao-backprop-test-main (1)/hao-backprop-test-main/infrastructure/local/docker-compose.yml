@@ -1,7 +1,7 @@
 version: '3.8'
 
 # Docker Compose configuration for Node.js Hello World application local development
-# This configuration sets up a containerized environment with hot reloading for development
+# Local source is bind-mounted into the container; hot reloading also requires a dev command, which no manifest defines
 
 services:
   # Main application service
@@ -17,7 +17,7 @@ services:
       - PORT=3000
       - NODE_ENV=development
     volumes:
-      # Mount local source code for hot reloading
+      # Bind-mount local source into the container (hot reloading requires a dev command)
       - ../../src/backend:/app
       # Preserve node_modules in container
       - /app/node_modules
@@ -32,19 +32,17 @@ services:
     networks:
       - hello-world-network
 
-# Network configuration
 networks:
   hello-world-network:
     driver: bridge
 
-# Volume configuration
 volumes:
   node_modules:
-    # Volume for Node.js dependencies to avoid overwriting with local bind mount
+    # Reserved named volume (currently unused): the service mounts /app/node_modules anonymously
 
 # Usage instructions:
 # - Start the container: docker-compose up
 # - Start in detached mode: docker-compose up -d
 # - View logs: docker-compose logs -f
-# - Stop the container: docker-compose down
+# - Stop and remove the Compose containers and network: docker-compose down
 # - Rebuild the container: docker-compose build

@@ -2,9 +2,20 @@
 # ==============================================================================
 # Node.js Hello World Application - Setup Script
 # 
-# This script automates the initial setup process for the Node.js Hello World application.
-# It checks prerequisites, installs dependencies, configures the environment, and
-# ensures the system is ready to run the application.
+# This script automates the initial setup steps for the Node.js Hello World application:
+# it checks the Node.js and npm prerequisites, runs npm install unless -s is given, writes
+# PORT and NODE_ENV into the .env file, creates the logs directory, probes the requested
+# port, and then reports which of those artifacts it can find.
+#
+# Known limitations of the script as written, which keep it from leaving a ready-to-run
+# system on its own:
+#   - check_node_version compares versions the wrong way round, so a Node.js release at or
+#     above MIN_NODE_VERSION is reported as too old and main exits 1 at the prerequisite
+#     stage. The contract comment on that function records the return codes it produces.
+#   - BACKEND_DIR is $PROJECT_ROOT/src, which holds no package.json in this repository, so
+#     npm resolves upward to the project-root manifest and installs there. verify_setup
+#     then looks for $BACKEND_DIR/node_modules, does not find it and returns 1, which -
+#     unguarded under set -e - ends the run before the closing summary is printed.
 # ==============================================================================
 
 set -e  # Exit immediately if a command exits with a non-zero status
@@ -40,12 +51,13 @@ print_usage() {
     echo "    setup.sh - Node.js Hello World Application Setup Script"
     echo
     echo -e "${BLUE}SYNOPSIS${NC}"
-    echo "    ./setup.sh [OPTIONS]"
+    echo "    bash ./setup.sh [OPTIONS]"
     echo
     echo -e "${BLUE}DESCRIPTION${NC}"
-    echo "    This script automates the initial setup process for the Node.js Hello World application."
-    echo "    It checks prerequisites, installs dependencies, configures the environment, and ensures"
-    echo "    the system is ready to run the application."
+    echo "    This script automates the initial setup steps for the Node.js Hello World application."
+    echo "    It checks the Node.js and npm prerequisites, installs dependencies with npm unless -s"
+    echo "    is given, writes PORT and NODE_ENV into the .env file, creates the logs directory,"
+    echo "    probes the requested port, and then reports which of those artifacts it can find."
     echo
     echo -e "${BLUE}OPTIONS${NC}"
     echo "    -p PORT       Specify the port number for the server (default: 3000)"
@@ -55,10 +67,19 @@ print_usage() {
     echo "    -h, --help    Display this help message and exit"
     echo
     echo -e "${BLUE}EXAMPLES${NC}"
-    echo "    ./setup.sh"
-    echo "    ./setup.sh -p 8080"
-    echo "    ./setup.sh -e production"
-    echo "    ./setup.sh -s"
+    echo "    bash ./setup.sh"
+    echo "    bash ./setup.sh -p 8080"
+    echo "    bash ./setup.sh -e production"
+    echo "    bash ./setup.sh -s"
+    echo
+    echo -e "${BLUE}KNOWN LIMITATIONS${NC}"
+    echo "    This script does not leave a ready-to-run system on its own:"
+    echo "    - check_node_version compares versions the wrong way round, so a Node.js release at"
+    echo "      or above $MIN_NODE_VERSION is reported as too old and the run exits 1."
+    echo "    - Dependency installation runs in BACKEND_DIR (\$PROJECT_ROOT/src), which must hold"
+    echo "      the project's package.json. This repository keeps its only manifest at the"
+    echo "      project root, so npm installs there and the final verification reports"
+    echo "      dependencies as missing."
     echo
 }
 
@@ -120,14 +141,18 @@ parse_arguments() {
 
 # ==============================================================================
 # Function: check_node_version
-# Description: Checks if the installed Node.js version meets the minimum requirement
+# Description: Compares the installed Node.js version against MIN_NODE_VERSION. The
+#              comparison below is inverted with respect to that intent: the branch that
+#              reports an adequate version is reached only when the installed version is
+#              lower than MIN_NODE_VERSION.
 # Returns:
-#   0 if Node.js version is adequate, 1 otherwise
+#   1 when Node.js is absent from PATH, and 1 when the installed version is at or above
+#   MIN_NODE_VERSION; 0 only when the installed version is below MIN_NODE_VERSION. main
+#   calls this as `check_node_version || exit 1`, so an up-to-date Node.js ends the run.
 # ==============================================================================
 check_node_version() {
     echo -e "${BLUE}Checking Node.js version...${NC}"
     
-    # Check if node is installed
     if ! command -v node &> /dev/null; then
         echo -e "${RED}Error: Node.js is not installed or not in the PATH${NC}"
         echo "Please install Node.js version $MIN_NODE_VERSION or higher"
@@ -135,7 +160,6 @@ check_node_version() {
         return 1
     fi
     
-    # Get current Node.js version
     CURRENT_VERSION=$(node --version | cut -d "v" -f 2)
     echo "Current Node.js version: $CURRENT_VERSION"
     
@@ -175,20 +199,21 @@ check_npm() {
 
 # ==============================================================================
 # Function: install_dependencies
-# Description: Installs Node.js dependencies using npm
+# Description: Runs npm install inside BACKEND_DIR. For the install to come from this
+#              project's manifest, BACKEND_DIR must hold its package.json; this repository
+#              keeps its only manifest at PROJECT_ROOT, so npm resolves upward out of
+#              BACKEND_DIR ($PROJECT_ROOT/src) and installs into the project root instead.
 # Returns:
-#   0 if installation was successful, 1 otherwise
+#   0 if npm install exited successfully, 1 if BACKEND_DIR is unreachable or npm failed
 # ==============================================================================
 install_dependencies() {
     echo -e "${BLUE}Installing dependencies...${NC}"
     
-    # Change to the backend directory
     cd "$BACKEND_DIR" || {
         echo -e "${RED}Error: Could not change to backend directory: $BACKEND_DIR${NC}"
         return 1
     }
     
-    # Run npm install
     echo "Running npm install in $(pwd)"
     if npm install; then
         echo -e "${GREEN}✓ Dependencies installed successfully${NC}"
@@ -202,7 +227,10 @@ install_dependencies() {
 
 # ==============================================================================
 # Function: setup_environment
-# Description: Sets up environment configuration by creating .env file from template
+# Description: Creates or updates the .env file, copying ENV_EXAMPLE_FILE when that
+#              template is present and writing a new file when it is not, then applies the
+#              requested PORT and NODE_ENV and ensures LOG_DIR exists. No template ships
+#              with this repository, so the write-a-new-file path is the one taken here.
 # Returns:
 #   0 if setup was successful, 1 otherwise
 # ==============================================================================
@@ -239,7 +267,6 @@ setup_environment() {
         echo "NODE_ENV=$NODE_ENV" >> "$ENV_FILE"
     fi
     
-    # Create logs directory if it doesn't exist
     if [ ! -d "$LOG_DIR" ]; then
         echo "Creating logs directory: $LOG_DIR"
         mkdir -p "$LOG_DIR" || {
@@ -279,7 +306,7 @@ check_port_availability() {
             echo "You may need to choose a different port with the -p option"
             return 1
         fi
-    # Last resort - try to bind to the port directly
+    # Last resort - attempt a TCP connection to detect an existing listener
     else
         (
             exec 3<> /dev/tcp/localhost/$port
@@ -307,7 +334,6 @@ verify_setup() {
     echo -e "${BLUE}Verifying setup...${NC}"
     local status=0
     
-    # Check if node_modules directory exists
     if [ -d "$BACKEND_DIR/node_modules" ]; then
         echo -e "${GREEN}✓ Dependencies are installed${NC}"
     else
@@ -315,7 +341,6 @@ verify_setup() {
         status=1
     fi
     
-    # Check if .env file exists
     if [ -f "$ENV_FILE" ]; then
         echo -e "${GREEN}✓ Environment configuration exists${NC}"
     else
@@ -323,7 +348,6 @@ verify_setup() {
         status=1
     fi
     
-    # Check if logs directory exists
     if [ -d "$LOG_DIR" ]; then
         echo -e "${GREEN}✓ Logs directory exists${NC}"
     else
@@ -349,7 +373,6 @@ verify_setup() {
 #   Exit code indicating success (0) or failure (1)
 # ==============================================================================
 main() {
-    # Parse command line arguments
     parse_arguments "$@"
     
     echo -e "${BLUE}==================================================${NC}"
@@ -373,13 +396,12 @@ main() {
         echo -e "${YELLOW}Skipping dependency installation as requested${NC}"
     fi
     
-    # Setup environment
     setup_environment || exit 1
     
-    # Check port availability (non-blocking)
+    # The call below is unguarded, so under set -e a port already in use (return 1) exits
+    # the script here, before verification and before the next-steps summary
     check_port_availability "$PORT"
     
-    # Verify setup
     verify_setup
     local setup_status=$?
     
@@ -407,5 +429,4 @@ main() {
     return $setup_status
 }
 
-# Execute main function with all script arguments
 main "$@"

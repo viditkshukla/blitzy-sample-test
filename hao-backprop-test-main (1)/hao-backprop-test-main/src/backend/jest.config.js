@@ -12,7 +12,6 @@
  */
 
 module.exports = {
-  // Use Node.js as the test environment
   testEnvironment: 'node',
   
   // Look for test files in __tests__ directories with .test.js extension
@@ -66,7 +65,6 @@ module.exports = {
     ]
   ],
   
-  // Enable verbose output for detailed test information
   verbose: true,
   
   // Mock behavior settings

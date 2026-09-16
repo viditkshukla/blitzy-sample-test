@@ -43,7 +43,7 @@ npm install
 npm start
 ```
 
-The application will be available at http://localhost:3000/hello.
+The application will be available at http://localhost:3000/welcome.
 
 ### Docker Deployment
 
@@ -57,7 +57,7 @@ docker build -t hello-node:latest ../src/backend
 docker run -p 3000:3000 -d --name hello-node hello-node:latest
 ```
 
-The application will be available at http://localhost:3000/hello.
+The application will be available at http://localhost:3000/welcome.
 
 To stop the container:
 
@@ -76,7 +76,7 @@ docker-compose up -d
 ```
 
 This will start:
-- The Node.js Hello World application (http://localhost:3000/hello)
+- The Node.js Hello World application (http://localhost:3000/welcome)
 - Prometheus monitoring (http://localhost:9090)
 - Grafana dashboards (http://localhost:3001, login with admin/admin)
 
@@ -153,7 +153,7 @@ A health check script is provided to verify that the application is running corr
 ./scripts/health-check.sh --verbose
 ```
 
-The script checks if the `/hello` endpoint returns "Hello world" with a 200 OK status code.
+The script checks if the `/welcome` endpoint returns "Welcome to HelloGHES" with a 200 OK status code.
 
 ## Docker Compose Configuration
 

@@ -290,7 +290,7 @@ main() {
     if [ $start_result -eq 0 ]; then
         if [ "$DETACHED" = true ]; then
             log_message "INFO" "Server started successfully in background."
-            log_message "INFO" "To access the Hello endpoint, visit: http://localhost:$PORT/hello"
+            log_message "INFO" "To access the Welcome endpoint, visit: http://localhost:$PORT/welcome"
             log_message "INFO" "To stop the server: kill $(cat "$PID_FILE")"
         else
             # This will only be reached if the server exits normally in foreground mode

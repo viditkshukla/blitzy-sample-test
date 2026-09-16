@@ -15,14 +15,23 @@ const logger = require('../utils/logger');
 // Mock dependencies
 jest.mock('../handlers/welcomeHandler');
 jest.mock('../errorHandler');
-// A factory mock is required: automocking only stubs the methods the logger
-// actually exports, and route() calls logger.request.
-jest.mock('../utils/logger', () => ({
-  request: jest.fn(),
-  info: jest.fn(),
-  warn: jest.fn(),
-  error: jest.fn()
-}));
+// The logger mock is derived from the real module's own export surface rather
+// than hand-written. It still supplies request, info, warn and error, because
+// src/backend/utils/logger.js exports all four, but it cannot invent a method
+// the emitter does not have: drop request from the logger and logger.request
+// becomes undefined here, so route()'s first statement throws in this suite
+// instead of the defect being masked until production.
+jest.mock('../utils/logger', () => {
+  const actualLogger = jest.requireActual('../utils/logger');
+  
+  return Object.keys(actualLogger).reduce((mockLogger, method) => {
+    mockLogger[method] = typeof actualLogger[method] === 'function'
+      ? jest.fn()
+      : actualLogger[method];
+    
+    return mockLogger;
+  }, {});
+});
 
 describe('route', () => {
   // Mock request and response objects
@@ -93,8 +102,12 @@ describe('route', () => {
     // Call the route function
     route(req, res);
     
-    // Verify logged information contains only the path (not query params)
-    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining(ROUTES.WELCOME));
+    // Verify logged information contains only the path (not query params).
+    // The comparison is exact, and a second assertion rejects the query string
+    // outright: a substring match would also accept the leaked
+    // '/welcome?param=value', which is the opposite of what this test claims.
+    expect(logger.info).toHaveBeenCalledWith(`Routing to handler for path: ${ROUTES.WELCOME}`);
+    expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining('?param=value'));
     
     // Verify the correct handler was called based on the parsed path
     expect(handleWelcomeRequest).toHaveBeenCalledWith(req, res);

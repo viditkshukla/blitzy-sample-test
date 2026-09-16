@@ -21,30 +21,15 @@ scrape_configs:
     metrics_path: '/metrics'
     scheme: 'http'
 
-  # Application metrics monitoring
-  - job_name: 'hello-world-app'
-    static_configs:
-      - targets: ['hello-world-app:3000']
-        labels:
-          service: 'hello-world-app'
-    metrics_path: '/metrics'
-    scheme: 'http'
-    # More frequent scraping for application metrics
-    scrape_interval: 5s
-    scrape_timeout: 3s
-
-  # Application health monitoring
-  - job_name: 'hello-world-health'
-    static_configs:
-      - targets: ['hello-world-app:3000']
-        labels:
-          service: 'hello-world-app'
-          endpoint: 'health'
-    metrics_path: '/health'
-    scheme: 'http'
-    # Less frequent health checks
-    scrape_interval: 30s
-    scrape_timeout: 5s
+  # The application is deliberately not scraped. It serves a single HTTP route and exposes no
+  # Prometheus exposition endpoint, so a scrape of it can only fail: every other path returns
+  # a 404 text/plain body that carries no metric samples, which Prometheus records as a failed
+  # scrape and reports as the service being permanently down whatever its real state.
+  # Application availability is gated outside Prometheus instead: by
+  # infrastructure/scripts/health-check.sh for deployments and by the container health check in
+  # infrastructure/local/docker-compose.yml for a running container. An application scrape job
+  # belongs here only alongside a real exposition endpoint served by the application under an
+  # explicit metric-name and label contract.
 
 # Alerting configuration (placeholder - not fully configured for this simple application)
 alerting:

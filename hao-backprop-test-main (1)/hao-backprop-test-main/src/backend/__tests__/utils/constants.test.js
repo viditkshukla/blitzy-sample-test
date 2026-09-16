@@ -63,11 +63,8 @@ describe('CONFIG', () => {
  * Test suite for message string constants
  */
 describe('MESSAGES', () => {
-  test("should define WELCOME_HEADING as 'Welcome to HelloGHES'", () => {
+  test('should define WELCOME_HEADING and WELCOME_DESCRIPTION as the welcome screen copy', () => {
     expect(MESSAGES.WELCOME_HEADING).toBe('Welcome to HelloGHES');
-  });
-
-  test('should define WELCOME_DESCRIPTION as the welcome screen description', () => {
     expect(MESSAGES.WELCOME_DESCRIPTION).toBe('A simple Node.js service that greets you from the /welcome endpoint.');
   });
 

@@ -51,7 +51,7 @@ print_usage() {
     echo
     echo "Options:"
     echo "  -p PORT       Port to listen on (default: $DEFAULT_PORT)"
-    echo "  -e ENV        Node.js environment (default: $DEFAULT_NODE_ENV)"
+    echo "  -e ENV        Node.js environment: development, production or test (default: $DEFAULT_NODE_ENV)"
     echo "  -d            Run in detached mode (background)"
     echo "  -v            Enable verbose output"
     echo "  -h, --help    Show this help message and exit"
@@ -82,6 +82,16 @@ parse_arguments() {
                 ;;
             e)
                 NODE_ENV=$OPTARG
+                # Reject anything src/backend/config.js cannot recognise before it is
+                # exported: that module compares NODE_ENV for equality, so an
+                # unrecognised value leaves IS_DEV, IS_PROD and IS_TEST all false and
+                # every environment gate silently mis-resolves. Same set and wording as
+                # infrastructure/scripts/setup.sh so the two scripts agree.
+                if [[ ! "$NODE_ENV" =~ ^(development|production|test)$ ]]; then
+                    log_message "ERROR" "Environment must be one of: development, production, test"
+                    print_usage
+                    exit 1
+                fi
                 ;;
             d)
                 DETACHED=true
@@ -386,7 +396,10 @@ start_server() {
         local pid=$!
         
         if is_process_alive "$pid"; then
-            echo "$pid" > "$PID_FILE"
+            # Written owner-only: the pid file sits at a predictable path inside the
+            # working tree, so the umask is narrowed for this write alone rather than
+            # leaving the record of a running process group- and world-readable.
+            ( umask 077; echo "$pid" > "$PID_FILE" )
             log_message "INFO" "Server started in background with PID: $pid"
         else
             log_message "ERROR" "Failed to start server in background."

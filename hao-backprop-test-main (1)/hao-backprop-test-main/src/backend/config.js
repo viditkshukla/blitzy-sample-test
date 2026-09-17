@@ -17,6 +17,25 @@ const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_NODE_ENV = 'development';
 const DEFAULT_LOG_LEVEL = 'INFO';
 
+/**
+ * Shape a PORT value must have, in full, before it is worth range-checking.
+ *
+ * Anchored at BOTH ends on purpose. `parseInt` stops at the first character that is not a
+ * digit and returns the numeric PREFIX it has already read, so `parseInt('3000extra', 10)`
+ * is 3000 and `parseInt('3243; touch x', 10)` is 3243. Range-checking that prefix alone
+ * accepts a corrupted or templated-wrong value, binds a port the configuration never
+ * specified and discards the remainder of the string without a word - while a value with
+ * no leading digit at all is warned about and defaulted. Testing the whole trimmed string
+ * first removes that inconsistency: a partly numeric value takes the same
+ * warn-and-default path a wholly non-numeric one already takes.
+ *
+ * Digits only: a sign, a decimal point or an exponent is not a TCP port, and each of
+ * those is a value `parseInt` would otherwise coerce into one.
+ *
+ * @type {RegExp}
+ */
+const PORT_PATTERN = /^[0-9]+$/;
+
 /*
  * Deferred notice delivery
  * ------------------------
@@ -233,19 +252,39 @@ function loadEnv() {
 }
 
 /**
- * Validates that the port number is within valid range
- * 
- * @param {any} port - Port value to validate
- * @returns {number} - Valid port number
+ * Validates that the port value is a whole number within the valid TCP port range.
+ *
+ * The value is checked as a complete string against `PORT_PATTERN` BEFORE it is parsed,
+ * so anything only partly numeric is rejected rather than silently truncated to its
+ * leading digits. Whatever the value, an unusable one is reported at `warn` and the
+ * documented default is returned; the configuration never fails to resolve over a port.
+ *
+ * @param {any} port - Port value to validate, from the environment or a numeric caller
+ * @returns {number} - The validated port number, or `DEFAULT_PORT` when unusable
  */
 function validatePort(port) {
-  const parsedPort = parseInt(port, 10);
-  
-  if (isNaN(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+  // Stringified so one rule covers both an environment variable and a numeric caller,
+  // and trimmed because .env and YAML sources pad values with surrounding whitespace -
+  // that is formatting, not corruption, so it is stripped rather than rejected.
+  const rawPort = String(port).trim();
+
+  if (!PORT_PATTERN.test(rawPort)) {
+    // An empty or whitespace-only value would otherwise render as `Invalid port: .`;
+    // the `(empty)` literal keeps the line legible. Every other value is reported
+    // verbatim, exactly as it was supplied.
+    const reportedPort = rawPort === '' ? '(empty)' : port;
+    notify('warn', `Invalid port: ${reportedPort}. Using default port: ${DEFAULT_PORT}`);
+    return DEFAULT_PORT;
+  }
+
+  // Safe now: the string is digits end to end, so the parse consumes all of it.
+  const parsedPort = parseInt(rawPort, 10);
+
+  if (parsedPort < 1 || parsedPort > 65535) {
     notify('warn', `Invalid port: ${port}. Using default port: ${DEFAULT_PORT}`);
     return DEFAULT_PORT;
   }
-  
+
   return parsedPort;
 }
 
@@ -258,8 +297,16 @@ function getConfig() {
   // Load environment variables from .env file if it exists
   loadEnv();
   
-  // Get configuration values from environment variables or use defaults
-  const PORT = validatePort(process.env.PORT || DEFAULT_PORT);
+  // Get configuration values from environment variables or use defaults.
+  //
+  // PORT distinguishes "not configured" from "configured badly", which `||` cannot: an
+  // explicitly set but empty PORT is falsy, so it would fall through to the default and
+  // never reach the validator - the same silent adoption of a broken value that
+  // prefix-based parsing used to allow. Absent means take the documented default;
+  // present means validate it and say so when it is unusable.
+  const PORT = process.env.PORT === undefined
+    ? DEFAULT_PORT
+    : validatePort(process.env.PORT);
   const HOST = process.env.HOST || DEFAULT_HOST;
   const NODE_ENV = process.env.NODE_ENV || DEFAULT_NODE_ENV;
   const LOG_LEVEL = process.env.LOG_LEVEL || DEFAULT_LOG_LEVEL;

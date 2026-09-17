@@ -38,9 +38,15 @@ For local development and testing, you can run the application directly with Nod
 ```bash
 cd ../src/backend
 
-# No manifest declares the application's dependencies, so install its one
-# runtime dependency explicitly; --no-save leaves package.json unchanged
-npm install --no-save dotenv@16.0.3
+# No manifest declares the application's dependencies: package.json carries no dependencies
+# and no devDependencies block, so `npm install` on its own installs nothing and `npm ci`
+# creates no node_modules at all. Install the pinned set explicitly; --no-save leaves
+# package.json and package-lock.json unchanged. dotenv is the only one the server needs at
+# runtime and the other three are the test toolchain, but this is the repository's single
+# install recipe — published identically here, in ../README.md and in ../src/backend/README.md
+# — and jest-junit is pinned at 17.0.0 on security grounds, which those files' Installation
+# and Security Audit sections record together with the gap that nothing enforces the pin
+npm install --no-save jest@29.5.0 supertest@6.3.3 dotenv@16.0.3 jest-junit@17.0.0
 
 # No "start" script is defined, and npm start would fall back to the unrelated
 # root server.js demo, so run the backend entry point directly
@@ -294,12 +300,15 @@ These can be set in the Docker Compose file or passed to the container at runtim
 
 ### Updating Dependencies
 
-To update the application dependencies:
-
-```bash
-cd ../src/backend
-npm update
-```
+Do not run `npm update` against this checkout. No manifest declares the application's
+dependencies, so npm treats every installed package as extraneous and prunes it: run from
+`../src/backend` it reports `removed 309 packages` and leaves the service unable to start,
+because the runtime `dotenv` goes with them. There is nothing for it to update, either — an
+update here means changing a pinned version in the install recipe published under
+[Local Deployment](#local-deployment) and re-running that command from `../src/backend`. The
+same command is the recovery step if `node_modules` was pruned. It is deliberately not
+repeated in this section: the recipe is published once per file so that a changed pin cannot
+be picked up in one place and missed in another.
 
 ### Rebuilding Containers
 

@@ -126,26 +126,35 @@ perform_health_check() {
     local url="http://$HOST:$PORT$ENDPOINT"
     log_verbose "Health check URL: $url"
     
-    # Create a temporary file for the response body
-    local tmp_file
-    tmp_file=$(mktemp)
-    
     log_verbose "Executing curl request with timeout of $TIMEOUT seconds..."
     
-    # Use curl to get both status code and response body
-    local status_code
-    status_code=$(curl -s -o "$tmp_file" -w "%{http_code}" -m "$TIMEOUT" "$url")
+    # Use curl to get both status code and response body from a single request,
+    # captured entirely in shell variables. The body goes to stdout and
+    # "%{http_code}" is appended on its own trailing line, so this gate needs no
+    # temporary file and therefore no temporary directory.
+    #
+    # Staging the body on disk instead made the gate depend on a writable TMPDIR.
+    # An unwritable or missing one left the temp-file name empty, curl rejected
+    # the resulting blank -o argument with exit code 2, and the failure surfaced
+    # through the "Check if the server is running" branch below - blaming a
+    # healthy service for an environment fault. It also left the temp file behind
+    # whenever a run was terminated while the request was in flight: a cleanup
+    # trap covers SIGINT, SIGTERM and SIGHUP but never SIGKILL, which cannot be
+    # caught, so creating nothing on disk is the only way to leave no residue on
+    # every exit path.
+    local curl_response
+    curl_response=$(curl -s -w "\n%{http_code}" -m "$TIMEOUT" "$url")
     local curl_exit_code=$?
     
     if [ $curl_exit_code -ne 0 ]; then
         log_error "curl command failed with exit code $curl_exit_code. Check if the server is running."
-        rm -f "$tmp_file"
         return 1
     fi
     
-    local response_body
-    response_body=$(cat "$tmp_file")
-    rm -f "$tmp_file"
+    # Split the captured output on its final newline: the status code is
+    # everything after it, the response body everything before it.
+    local status_code="${curl_response##*$'\n'}"
+    local response_body="${curl_response%$'\n'*}"
     
     log_verbose "Received HTTP status code: $status_code"
     log_verbose "Received response body: '$response_body'"

@@ -10,32 +10,11 @@
  */
 
 // Import dependencies
-const { logRequest, warn, error } = require('../utils/logger');
+const { logRequest, error } = require('../utils/logger');
 const { handleServerError } = require('../handlers/error');
 
 /**
  * Middleware that logs information about HTTP requests and responses
- * 
- * The record is emitted from the response object's own lifecycle events, not
- * from a wrapper around res.end. Do not restore the wrapper: it ran before the
- * response bytes were handed off, which made the measured duration cover handler
- * time only and made an abandoned response indistinguishable from a delivered
- * one in the log.
- * 
- * - 'finish' fires once the last segment of headers and body has been handed to
- *   the operating system, so the duration covers delivery and res.statusCode is
- *   final by then. This is the ordinary access record, emitted by logRequest,
- *   which selects INFO/WARN/ERROR from the status code.
- * - 'close' fires when the response is torn down. Reaching it without having
- *   emitted the access record means the client went away before the response
- *   completed, so that is reported as a premature termination at WARN level: an
- *   aborted client is not a server fault, and ERROR here would raise a false
- *   alarm on any error-rate alert.
- * 
- * Exactly one record is written per request. A delivered response fires 'finish'
- * then 'close'; an abandoned one fires 'close' alone. The `recorded` flag, rather
- * than res.writableEnded, is what distinguishes them, because res.end() may have
- * been called on a response whose bytes never reached the client.
  * 
  * @param {Object} req - HTTP request object
  * @param {Object} res - HTTP response object
@@ -45,39 +24,20 @@ function requestLogger(req, res, next) {
   // Record start time to calculate response time
   const startTime = Date.now();
   
-  // Set by whichever response event fires first, so the other one stays silent
-  let recorded = false;
+  // Store the original end method
+  const originalEnd = res.end;
   
-  // The response was fully handed off for delivery: emit the access record
-  res.once('finish', () => {
-    if (recorded) {
-      return;
-    }
-    recorded = true;
-    
-    // Calculate response time, now inclusive of delivery
+  // Override the end method to log the request when it completes
+  res.end = function(chunk, encoding) {
+    // Calculate response time
     const responseTime = Date.now() - startTime;
     
     // Log the request using the logger utility
     logRequest(req, res, responseTime);
-  });
-  
-  // The response was torn down; if nothing has been recorded yet, it never completed
-  res.once('close', () => {
-    if (recorded) {
-      return;
-    }
-    recorded = true;
     
-    // Calculate the time spent before the connection went away
-    const responseTime = Date.now() - startTime;
-    
-    // Keep the access line's four leading fields in the same order so existing
-    // log parsers keep working, then append prose that makes the record
-    // self-describing. Nothing client-supplied beyond the method and URL the
-    // access line already carries is logged - no headers, no body, no peer address.
-    warn(`${req.method} ${req.url} ${res.statusCode} ${responseTime}ms client closed the connection before the response completed`);
-  });
+    // Call the original end method with the same arguments
+    return originalEnd.call(this, chunk, encoding);
+  };
   
   // Continue to the next middleware or handler
   next();

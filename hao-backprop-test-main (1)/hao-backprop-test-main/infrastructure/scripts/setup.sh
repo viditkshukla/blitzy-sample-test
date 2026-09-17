@@ -270,10 +270,16 @@ set_env_value() {
         return 1
     fi
     
-    # Carry over the permissions of the file being replaced; fall back to owner-only
-    # access where chmod does not support --reference
-    if ! chmod --reference="$file" "$tmp_file" 2>/dev/null; then
-        chmod 600 "$tmp_file"
+    # Owner-only access on the replacement, unconditionally. This helper rewrites nothing
+    # but ENV_FILE (see `local file=$ENV_FILE` above), the dotenv file config.js loads and
+    # therefore the place an operator puts a local credential, so there is no mode worth
+    # carrying over from the file being replaced: preserving it would let a permissive
+    # mode survive every write, and depending on `chmod --reference` would leave the
+    # tightening to whether that option is supported.
+    if ! chmod 600 "$tmp_file"; then
+        rm -f "$tmp_file"
+        echo -e "${RED}Error: Failed to restrict permissions on the replacement for $file${NC}" >&2
+        return 1
     fi
     
     if ! mv "$tmp_file" "$file"; then
@@ -300,20 +306,41 @@ set_env_value() {
 setup_environment() {
     echo -e "${BLUE}Setting up environment...${NC}"
     
-    # Create .env file if it doesn't exist
+    # Create .env file if it doesn't exist. dotenv loads this file (src/backend/config.js),
+    # which makes it the file an operator puts a local credential in, so each creation path
+    # narrows the umask to 077 in a subshell first: the file is owner-only from the moment
+    # it exists, with no window in which it is world-readable waiting for a later chmod.
     if [ -f "$ENV_FILE" ]; then
         echo "Environment file (.env) already exists"
     elif [ -f "$ENV_EXAMPLE_FILE" ]; then
         echo "Creating environment file from example template"
-        cp "$ENV_EXAMPLE_FILE" "$ENV_FILE"
+        # A copy takes the template's mode masked by the umask, so the umask is what
+        # decides the result rather than whatever mode .env.example happens to carry
+        if ! ( umask 077; cp "$ENV_EXAMPLE_FILE" "$ENV_FILE" ); then
+            echo -e "${RED}Error: Failed to create environment file from $ENV_EXAMPLE_FILE${NC}" >&2
+            return 1
+        fi
     else
         echo "Creating new environment file"
-        echo "# Node.js Hello World Application Environment Configuration" > "$ENV_FILE"
+        # Create and truncate the file owner-only, then append the content to it
+        if ! ( umask 077; : > "$ENV_FILE" ); then
+            echo -e "${RED}Error: Failed to create environment file: $ENV_FILE${NC}" >&2
+            return 1
+        fi
+        echo "# Node.js Hello World Application Environment Configuration" >> "$ENV_FILE"
         echo "# Created by setup script on $(date)" >> "$ENV_FILE"
         echo "" >> "$ENV_FILE"
         echo "# Server configuration" >> "$ENV_FILE"
         echo "PORT=$PORT" >> "$ENV_FILE"
         echo "NODE_ENV=$NODE_ENV" >> "$ENV_FILE"
+    fi
+    
+    # The mode belongs to the file, not to the run that created it: an .env left behind at
+    # a permissive mode by an earlier run is tightened here too, which also closes any gap
+    # the copy above could leave
+    if ! chmod 600 "$ENV_FILE"; then
+        echo -e "${RED}Error: Failed to restrict permissions on environment file: $ENV_FILE${NC}" >&2
+        return 1
     fi
     
     # Update PORT in .env if specified

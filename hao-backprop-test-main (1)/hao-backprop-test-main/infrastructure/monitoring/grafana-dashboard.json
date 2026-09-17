@@ -28,7 +28,7 @@
       },
       "type": "text",
       "title": "Node.js Hello World Application Dashboard",
-      "content": "# Node.js Hello World Application\nThis dashboard provides monitoring for the Node.js Hello World application, showing key metrics like application health, request rates, response times, and resource usage.\n\n**Known gap: these panels have no producer yet.** The application serves a single route, `/welcome`, and exposes neither `/metrics` nor `/health`, so the `hello-world-app` and `hello-world-health` scrape jobs receive 404 and report `up = 0` even when the service is healthy. Every panel below stays empty until instrumentation, an exporter or a metrics endpoint is added. The queries are kept as the record of what this dashboard expects. See `infrastructure/README.md`, \"Monitoring\", for the full record.",
+      "content": "# Node.js Hello World Application\nThis dashboard provides monitoring for the Node.js Hello World application, showing key metrics like application health, request rates, response times, and resource usage.",
       "mode": "markdown"
     },
     {

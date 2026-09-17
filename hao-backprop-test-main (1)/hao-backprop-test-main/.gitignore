@@ -11,3 +11,10 @@ coverage/
 # Runtime logs
 *.log
 npm-debug.log*
+
+# Launcher runtime artifacts written by infrastructure/scripts/start-server.sh
+# into the working tree: logs/server-<PORT>.pid, logs/server-<PORT>.log and
+# logs/start-server.log. None of them is a source artifact, so a detached launch
+# must not leave anything for `git add -A` to commit.
+logs/
+*.pid

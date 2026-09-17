@@ -22,19 +22,6 @@ scrape_configs:
     scheme: 'http'
 
   # Application metrics monitoring
-  #
-  # KNOWN GAP, PRE-EXISTING: the application exposes no /metrics endpoint. Its route table
-  # registers exactly one route, /welcome, so this scrape receives 404 Not Found and
-  # up{job="hello-world-app"} reads 0 against a service that is in fact healthy. Every
-  # Grafana panel querying http_requests_total, http_request_duration_seconds_bucket,
-  # nodejs_memory_usage_bytes, nodejs_cpu_usage_percentage, nodejs_event_loop_lag_seconds
-  # or process_start_time_seconds therefore renders empty.
-  #
-  # This job is kept deliberately. It is the record of what grafana-dashboard.json queries,
-  # and its job and service label values are what every PromQL selector in that dashboard
-  # matches on, so deleting it or renaming a label would orphan the dashboard rather than
-  # fix anything. Closing the gap needs instrumentation, an exporter or a /metrics endpoint,
-  # which is out of scope here. See infrastructure/README.md, "Monitoring", for the full record.
   - job_name: 'hello-world-app'
     static_configs:
       - targets: ['hello-world-app:3000']
@@ -47,13 +34,6 @@ scrape_configs:
     scrape_timeout: 3s
 
   # Application health monitoring
-  #
-  # KNOWN GAP, PRE-EXISTING: the application exposes no /health endpoint either, so this
-  # scrape also receives 404 Not Found and up{job="hello-world-health"} reads 0. The
-  # mechanism that does verify this service today is infrastructure/scripts/health-check.sh,
-  # which requests /welcome and matches the response body; it is a deployment gate rather
-  # than a scrape target, so it produces no series for this job. Kept for the same reason as
-  # the job above: it records what the dashboard's "Health Check Status" panel queries.
   - job_name: 'hello-world-health'
     static_configs:
       - targets: ['hello-world-app:3000']

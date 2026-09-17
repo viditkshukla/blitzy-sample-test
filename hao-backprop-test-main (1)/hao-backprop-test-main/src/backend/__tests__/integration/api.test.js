@@ -6,10 +6,38 @@
  * endpoint, representative rejected HTTP methods, and the retired /hello path.
  */
 
+const net = require('net'); // native
 const request = require('supertest'); // v6.3.3
 const { startServer, stopServer } = require('../../server');
 const { HTTP_STATUS, MESSAGES, HEADERS, ROUTES } = require('../../utils/constants');
 const { PORT } = require('../../config'); // config.js exports the resolved configuration object
+
+/**
+ * Sends a raw request line to the running server and resolves with everything
+ * it writes back.
+ *
+ * Supertest builds its requests through Node's HTTP client, which always sends
+ * an origin-form target and normalises what it is given, so the absolute-form
+ * and alternate-spelling cases below are driven over a plain socket instead.
+ *
+ * @param {string} target - Request target to put on the request line, verbatim
+ * @returns {Promise<string>} Everything the server wrote before closing
+ */
+function sendRawRequest(target) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ port: PORT, host: '127.0.0.1' });
+    let received = '';
+
+    socket.setTimeout(5000);
+    socket.on('data', (chunk) => { received += chunk.toString('utf8'); });
+    socket.on('close', () => resolve(received));
+    socket.on('timeout', () => { socket.destroy(); reject(new Error('raw request timed out')); });
+    socket.on('error', reject);
+    socket.on('connect', () => {
+      socket.write(`GET ${target} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`);
+    });
+  });
+}
 
 describe('API Integration Tests', () => {
   let serverInstance;
@@ -110,5 +138,59 @@ describe('API Integration Tests', () => {
       .expect('Content-Type', HEADERS.CONTENT_TYPE_TEXT);
 
     expect(response.text).toContain(MESSAGES.NOT_FOUND);
+  });
+
+  test('a malformed request target should return 404 Not Found and disclose nothing', async () => {
+    // 'http://[::1' is an absolute-form target with a malformed authority. It
+    // reaches the URL parser, which rejects it; a target that cannot be parsed
+    // addresses no route, so it is answered exactly as any unregistered path
+    // is - no 500, no stack trace, and no redirect.
+    const received = await sendRawRequest('http://[::1');
+
+    expect(received).toContain(`HTTP/1.1 ${HTTP_STATUS.NOT_FOUND} Not Found`);
+    expect(received).toContain(`${HEADERS.CONTENT_TYPE}: ${HEADERS.CONTENT_TYPE_TEXT}`);
+    expect(received).toContain(MESSAGES.NOT_FOUND);
+    expect(received).not.toContain('Location:');
+    expect(received).not.toContain(`${HTTP_STATUS.INTERNAL_SERVER_ERROR}`);
+    expect(received).not.toContain('    at ');
+  });
+
+  test('an absolute-form request target should serve the Welcome screen', async () => {
+    // RFC 9112 §3.2.2 requires a server to accept a proxy-style target. The
+    // dispatcher matches the path it carries, and the retired path stays
+    // retired in this form too.
+    const welcome = await sendRawRequest(`http://proxy.example${ROUTES.WELCOME}`);
+
+    expect(welcome).toContain(`HTTP/1.1 ${HTTP_STATUS.OK} OK`);
+    expect(welcome).toContain(MESSAGES.WELCOME_HEADING);
+    expect(welcome).toContain(MESSAGES.WELCOME_DESCRIPTION);
+
+    const retired = await sendRawRequest('http://proxy.example/hello');
+
+    expect(retired).toContain(`HTTP/1.1 ${HTTP_STATUS.NOT_FOUND} Not Found`);
+    expect(retired).toContain(MESSAGES.NOT_FOUND);
+  });
+
+  test('alternate spellings of the route should return 404 Not Found', async () => {
+    // The route table is matched by exact path. Resolving dot segments,
+    // folding a trailing slash or promoting a scheme-relative target to a host
+    // would widen the single registered route to every spelling below, so each
+    // one must stay a not-found path in both origin-form and absolute-form.
+    const spellings = [
+      `${ROUTES.WELCOME}/`,
+      `/.${ROUTES.WELCOME}`,
+      `/foo/..${ROUTES.WELCOME}`,
+      `${ROUTES.WELCOME}/..${ROUTES.WELCOME}`,
+      `/${ROUTES.WELCOME}`,
+      `//proxy.example${ROUTES.WELCOME}`,
+      `http://proxy.example/foo/..${ROUTES.WELCOME}`
+    ];
+
+    for (const spelling of spellings) {
+      const received = await sendRawRequest(spelling);
+
+      expect(received).toContain(`HTTP/1.1 ${HTTP_STATUS.NOT_FOUND} Not Found`);
+      expect(received).not.toContain(MESSAGES.WELCOME_HEADING);
+    }
   });
 });

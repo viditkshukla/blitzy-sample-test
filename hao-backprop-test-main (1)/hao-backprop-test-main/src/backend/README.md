@@ -33,15 +33,24 @@ cd src/backend
 # package-lock.json untouched, and node_modules is created at the project root, where Node's
 # upward resolution serves both the root and src/backend.
 #
-# jest.config.js names jest-junit as a reporter without a version, so the pin below is the
-# authoritative one for this repository: 17.0.0, because jest-junit 9.0.0 through 16.0.0
-# depend on a uuid affected by GHSA-w5hq-g745-h8pq (16.0.0 resolves uuid 8.3.2) while 17.0.0
-# audits clean. Earlier toolchain notes for this service quote 16.0.0 and label it a
-# verification-environment selection rather than a repository requirement; 17.0.0 supersedes
-# it and is verified against this configuration — the endpoint gate under Development exits 0
-# with 5 suites and 40 tests, and coverage/junit/junit.xml records tests="40". `npm audit` run
-# inside this checkout cannot tell the two versions apart: package.json declares nothing, so
-# all four packages are extraneous and the audit reports no vulnerabilities at either version.
+# The command below is the one place this repository publishes a jest-junit version, and
+# that version is 17.0.0. jest.config.js names the reporter as a bare module string, which
+# Jest resolves through require and which cannot carry a version, so its comment points back
+# here rather than repeating a figure that could drift. The pin is on security grounds: npm's
+# advisory data marks jest-junit 9.0.0 - 16.0.0 as affected through uuid — GHSA-w5hq-g745-h8pq,
+# "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided", moderate, uuid
+# < 11.1.1 — where 16.0.0 resolves uuid 8.3.2 and 17.0.0 requires uuid ^14.0.0. Verified
+# against this configuration: the endpoint gate under Development exits 0 and jest-junit
+# writes coverage/junit/junit.xml.
+#
+# Nothing enforces that pin. `npm audit` run inside this checkout cannot check it either:
+# package.json declares nothing, so all four packages are extraneous and the audit reports no
+# vulnerabilities at any version of them. Earlier toolchain notes for this service quote
+# jest-junit 16.0.0 and label it a verification-environment selection rather than a repository
+# requirement; 17.0.0 supersedes it. A tree provisioned from those notes carries uuid 8.3.2
+# unreported: `node -p "require('jest-junit/package.json').version"` and `npm ls uuid` show
+# what is actually installed, the command below replaces it, and the scratch audit under
+# Security Audit is what sees the advisory — 2 moderate findings at 16.0.0, none at 17.0.0.
 npm install --no-save jest@29.5.0 supertest@6.3.3 dotenv@16.0.3 jest-junit@17.0.0
 
 # The install creates node_modules/ at the project root and is meant to keep it: dotenv is a
@@ -264,17 +273,16 @@ contract:
 npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand \
   --testPathPattern "(handlers/welcomeHandler|integration/api|utils/constants|errorHandler|handlers/error)"
 
-# Run every suite. This exits 1: 10 suites, 5 passing and 5 failing; 86 tests, 68 passing and
-# 18 failing. The failing suites are config, index, router, server and utils/logger, and every
+# Run every suite. This exits 1: 10 suites, 6 passing and 4 failing; 103 tests, 85 passing and
+# 18 failing. The failing suites are index, router, server and utils/logger, and every
 # failure is pre-existing and unrelated to the /welcome endpoint — the inventory below names
 # each one with its cause.
 npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand
 
 # Coverage report. Both per-file thresholds are met — handlers/welcomeHandler.js at 100% on
 # all four metrics and handlers/error.js at its 90/100/90/90 — so the only threshold messages
-# are three global ones: statements 78.59% against 85, lines 78.84% against 85 and functions
-# 77.19% against 90. The global branch threshold is met, at 82.2% against 80. Those three are
-# why this exits 1.
+# are the four global ones: statements 78.41% against 85, branches 77.69% against 80, lines
+# 78.65% against 85 and functions 73.68% against 90. Those four are why this exits 1.
 npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand --coverage
 
 # Re-run on change. Interactive, so it does not exit on its own.
@@ -334,27 +342,28 @@ in full:
   callback takes no error argument, so a listen failure never reaches the promise and the test
   gets a resolved promise where it expects a rejection.
 
-`__tests__/config.test.js` contributes none of the 18 names: it fails to load with
-`Cannot find module '../../config'` — a wrong require depth — so it registers no tests, while
-still counting as one of the five failing suites.
+`__tests__/config.test.js` contributes none of the 18 names, and no longer fails: its require
+depth is corrected, so the suite loads and all 15 of its cases pass. Four suites fail, not
+five.
 
 ### Coverage
 
 Both per-file thresholds in `jest.config.js` are met: `handlers/welcomeHandler.js` at
-100/100/100/100 and `handlers/error.js` at its 90/100/90/90. Three of the four global
-thresholds (85 statements / 80 branches / 85 lines / 90 functions) are not: statements reach
-78.59%, lines 78.84% and functions 77.19%. The branch threshold is met, at 82.2% against 80.
+100/100/100/100 and `handlers/error.js` at its 90/100/90/90. None of the four global
+thresholds (85 statements / 80 branches / 85 lines / 90 functions) is met: statements reach
+78.41%, branches 77.69%, lines 78.65% and functions 73.68%.
 The shortfall is a function of which suites load rather than of anything in the `/welcome`
 endpoint. Measured:
 
 | File | % Stmts | % Branch | % Funcs | % Lines |
 |---|---|---|---|---|
 | `index.js` | 23.07 | 50 | 0 | 23.07 |
-| `config.js` | 81.15 | 70.45 | 100 | 81.15 |
-| `middleware/index.js` | 82.5 | 61.53 | 100 | 84.61 |
-| `server.js` | 89.55 | 91.3 | 100 | 89.55 |
+| `config.js` | 85.33 | 76.59 | 100 | 85.33 |
+| `middleware/index.js` | 90.62 | 66.66 | 100 | 93.54 |
+| `server.js` | 91.66 | 82.6 | 100 | 91.66 |
+| `utils/logger.js` | 72.72 | 57.14 | 77.77 | 72.72 |
 | `__tests__/setup.js` | 0 | 100 | 0 | 0 |
-| `router.js`, `errorHandler.js`, `handlers/error.js`, `handlers/welcomeHandler.js`, `utils/constants.js`, `utils/logger.js` | 100 | 100 | 100 | 100 |
+| `router.js`, `errorHandler.js`, `handlers/error.js`, `handlers/welcomeHandler.js`, `utils/constants.js` | 100 | 100 | 100 | 100 |
 
 `index.js` is not at zero — `__tests__/integration/api.test.js` requires it, so its
 module-level statements run — and `router.js` is not partly covered but complete, because
@@ -386,11 +395,43 @@ for f in $(find . -name '*.js' -not -path './node_modules/*' -not -path './cover
 ```bash
 # `npm run audit` and `npm run audit:fix` are not defined. npm's built-in audit resolves the
 # root manifest from here and reports on declared dependencies only: package.json declares
-# none, so it audits the root package alone and reports no vulnerabilities. It does not cover
-# the packages installed with --no-save above: audit those by declaring the same four versions
-# in a scratch package.json outside this checkout and running `npm audit` there.
+# none, so it audits the root package alone. It prints "found 0 vulnerabilities" while 309
+# packages sit in node_modules, and `npm audit --json` shows why —
+# "dependencies":{"prod":1,...,"total":0}. Every package installed with --no-save above is
+# extraneous and invisible to it.
 npm audit
+
+# What does cover them: declare the same four versions in a scratch package.json outside this
+# checkout and audit there. At the pinned versions this reports no vulnerabilities; substitute
+# jest-junit 16.0.0 and it reports 2 moderate, both GHSA-w5hq-g745-h8pq through uuid 8.3.2.
+probe=$(mktemp -d) && cd "$probe"
+printf '{"name":"audit-probe","version":"1.0.0","private":true,"dependencies":{"dotenv":"16.0.3"},"devDependencies":{"jest":"29.5.0","supertest":"6.3.3","jest-junit":"17.0.0"}}' > package.json
+npm install --no-audit --no-fund > /dev/null && npm audit
 ```
+
+**Known gap — nothing declares the packages this service needs.** `dotenv` is a runtime
+dependency (`config.js` requires it) and `jest`, `supertest` and `jest-junit` are required by
+the test configuration, yet the root `package.json` declares neither a `dependencies` nor a
+`devDependencies` block and `package-lock.json` carries no dependency tree at all:
+`grep -c integrity package-lock.json` returns `0`. Four reproducible consequences:
+
+- `npm ci` on a clean checkout reports `up to date, audited 1 package` and creates no
+  `node_modules` at all, so nothing is installed and no version is fixed by an integrity hash.
+- In that state the service cannot start: `node -e "require('./config.js')"` fails with
+  `Error: Cannot find module 'dotenv'`. The `--no-save` install under Installation is not
+  optional convenience — it is how the application gets its runtime dependency.
+- `npm audit` has no tree to audit, as above, so an advisory affecting an installed package is
+  never reported from inside this checkout.
+- `npm update` **removes** the installed tree instead of updating it. With nothing declared,
+  every installed package is extraneous and npm prunes it — the command reports
+  `removed 309 packages` and the service stops starting. Re-run the `--no-save` install
+  to restore it.
+
+Declaring the four packages and committing a populated lockfile is out of scope for the change
+that introduced `/welcome`, so the gap is recorded here rather than closed. Until an authorizing
+change declares them, the pinned `--no-save` command under Installation is this repository's
+only statement of the intended versions, and the scratch audit above is the only way to audit
+them.
 
 ## Docker
 

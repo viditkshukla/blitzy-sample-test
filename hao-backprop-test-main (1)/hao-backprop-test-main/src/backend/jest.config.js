@@ -59,6 +59,14 @@ module.exports = {
   reporters: [
     'default',
     [
+      // Jest resolves a reporter entry by name through require, so this string cannot carry
+      // a version, and no manifest declares one either: package.json has no devDependencies
+      // block. The repository publishes exactly one jest-junit version, in the pinned install
+      // command under Installation in README.md and src/backend/README.md, where the choice
+      // is justified on security grounds alongside the gap that nothing enforces it. Read the
+      // version from that command; deliberately not repeated here, because a second copy of
+      // the figure is what let this file and the READMEs disagree before. Note that a run
+      // fails outright if jest-junit is not installed at all.
       'jest-junit',
       {
         outputDirectory: './coverage/junit',

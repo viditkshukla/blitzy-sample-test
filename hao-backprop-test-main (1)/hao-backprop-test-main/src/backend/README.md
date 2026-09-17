@@ -273,7 +273,7 @@ contract:
 npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand \
   --testPathPattern "(handlers/welcomeHandler|integration/api|utils/constants|errorHandler|handlers/error)"
 
-# Run every suite. This exits 1: 10 suites, 6 passing and 4 failing; 103 tests, 85 passing and
+# Run every suite. This exits 1: 10 suites, 6 passing and 4 failing; 113 tests, 95 passing and
 # 18 failing. The failing suites are index, router, server and utils/logger, and every
 # failure is pre-existing and unrelated to the /welcome endpoint — the inventory below names
 # each one with its cause.
@@ -281,8 +281,11 @@ npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand
 
 # Coverage report. Both per-file thresholds are met — handlers/welcomeHandler.js at 100% on
 # all four metrics and handlers/error.js at its 90/100/90/90 — so the only threshold messages
-# are the four global ones: statements 78.41% against 85, branches 77.69% against 80, lines
-# 78.65% against 85 and functions 73.68% against 90. Those four are why this exits 1.
+# are the four global ones: statements 80.22% against 85, branches 78.28% against 80, lines
+# 80.44% against 85 and functions 77.41% against 90. Those four are why this exits 1. The
+# access-record tests take utils/logger.js to 100/95.83/100/100, while the deferred
+# notice-drain fallbacks in config.js are unreachable from the suites, so the global branch
+# figure stays just under its threshold.
 npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand --coverage
 
 # Re-run on change. Interactive, so it does not exit on its own.
@@ -323,13 +326,19 @@ in full:
 - **Absent logger exports.** `utils/logger.js` exports `info`, `warn`, `error`,
   `logServerStart`, `logServerStop` and `logRequest`. The suite also calls `debug`, `request`
   and `response`, which do not exist, so those four tests throw before asserting anything.
+  The hardening of the access record added no export: its sanitizer is module-private, and the
+  nine `logRequest access record` tests in the same file reach it through `logRequest`.
 - **`IS_TEST` suppression and the log format.** The other four logger tests call methods that
   *are* exported, so they do not throw; they fail their console assertions with zero calls,
   because `log()` returns early when `IS_TEST` — `config.js` derives it from
   `NODE_ENV === 'test'`, which Jest sets — so nothing reaches the console under Jest.
   Removing the suppression alone would not make them pass: the emitted line takes the form
   `[<ISO timestamp>] INFO: Test info message`, while the suite's regex requires
-  `[<ISO timestamp>] [INFO] Test info message`.
+  `[<ISO timestamp>] [INFO] Test info message`. Repairing these four is out of scope; the way
+  round the suppression, where a record's text has to be asserted, is the isolated module
+  registry the access-record tests use — `jest.isolateModules` with a `jest.doMock` of
+  `../../config` supplying `IS_TEST: false`, the same technique `server.test.js` uses for the
+  connection-boundary records.
 - **Require-time destructuring in `server.js`.** `server.js` destructures the logger's
   functions at require time, so the module holds direct references and a later
   `jest.spyOn(logger, …)` on the exported object cannot intercept them — hence four lifecycle
@@ -351,35 +360,47 @@ five.
 Both per-file thresholds in `jest.config.js` are met: `handlers/welcomeHandler.js` at
 100/100/100/100 and `handlers/error.js` at its 90/100/90/90. None of the four global
 thresholds (85 statements / 80 branches / 85 lines / 90 functions) is met: statements reach
-78.41%, branches 77.69%, lines 78.65% and functions 73.68%.
-The shortfall is a function of which suites load rather than of anything in the `/welcome`
-endpoint. Measured:
+80.22%, branches 78.28%, lines 80.44% and functions 77.41%. The access-record tests take
+`utils/logger.js` to 100/95.83/100/100, which brings the branch figure to within two points
+of its threshold, but the deferred notice-drain fallbacks in `config.js` are unreachable from
+these suites and hold it under. Note that Jest computes the global figures over the files
+*not* matched by a per-file threshold key, so they exclude `handlers/welcomeHandler.js` and
+`handlers/error.js` and are lower than the "All files" row of the printed table.
+
+The remaining shortfall is a function of which suites load rather than of anything in the
+`/welcome` endpoint. Measured:
 
 | File | % Stmts | % Branch | % Funcs | % Lines |
 |---|---|---|---|---|
 | `index.js` | 23.07 | 50 | 0 | 23.07 |
-| `config.js` | 85.33 | 76.59 | 100 | 85.33 |
+| `config.js` | 78.26 | 66.1 | 90.9 | 78.26 |
 | `middleware/index.js` | 90.62 | 66.66 | 100 | 93.54 |
 | `server.js` | 91.66 | 82.6 | 100 | 91.66 |
-| `utils/logger.js` | 72.72 | 57.14 | 77.77 | 72.72 |
+| `utils/logger.js` | 100 | 95.83 | 100 | 100 |
 | `__tests__/setup.js` | 0 | 100 | 0 | 0 |
 | `router.js`, `errorHandler.js`, `handlers/error.js`, `handlers/welcomeHandler.js`, `utils/constants.js` | 100 | 100 | 100 | 100 |
 
 `index.js` is not at zero — `__tests__/integration/api.test.js` requires it, so its
 module-level statements run — and `router.js` is not partly covered but complete, because
 `router.test.js` mocks the logger with a factory that supplies `request`, letting four of its
-five tests execute every line and branch of the module. `config.js` loads in every suite that
-loads at all, since `logger.js`, `server.js` and `middleware/index.js` all require it. The
-largest single drag is `__tests__/setup.js`: `jest.config.js` declares no `setupFiles`, so it
-is never loaded, yet `collectCoverageFrom` still collects it and it reports 0%.
+five tests execute every line and branch of the module. `utils/logger.js` is now complete on
+statements, lines and functions, and its one uncovered branch is the `err.stack` arm of
+`error()`, which no suite drives; the access-record tests cover the sanitizer and all three
+status-to-level arms. `config.js` loads in every suite that loads at all, since `logger.js`,
+`server.js` and `middleware/index.js` all require it. The largest single drag is
+`__tests__/setup.js`: `jest.config.js` declares no `setupFiles`, so it is never loaded, yet
+`collectCoverageFrom` still collects it and it reports 0%.
 
 ### Retired-path references kept in the suites
 
 `__tests__/handlers/error.test.js` keeps two `url: '/hello'` fixtures — one in the **405** test
-(`handleMethodNotAllowed`, line 68) and one in the **500** test (`handleServerError`, line
-105). They stand for an arbitrary request URL rather than a route, and the retirement of
-`/hello` makes them more accurate, not less, so both are deliberate keeps. The **404** test in
-the same file uses `url: '/unknown'` (line 37).
+(`handleMethodNotAllowed`) and one in the **500** test (`handleServerError`). They stand for an
+arbitrary request URL rather than a route, and the retirement of `/hello` makes them more
+accurate, not less, so both are deliberate keeps. Each is now also load-bearing: the two tests
+assert that the record does **not** contain the fixture, which is what pins the target to the
+access record alone. The **404** test in the same file uses `url: '/unknown'`, and a second
+404 test drives a 7 000-character path carrying a credential to prove neither reaches the
+record.
 
 ### Linting
 
@@ -465,6 +486,43 @@ This project provides two server implementations:
 2. **Express.js** (`server-express.js`): Uses the Express.js framework for simplified routing and middleware.
 
 By default, the application uses the native HTTP implementation. To use the Express implementation, modify the `index.js` file to import from `server-express.js` instead of `server.js`.
+
+### Request Logging
+
+Every record follows one grammar, `[<ISO timestamp>] <LEVEL>: <message>`. One request produces
+exactly one **access record**, written by `requestLogger`'s `res.end` wrapper
+(`middleware/index.js`) through `logRequest` (`utils/logger.js`) when the response ends:
+
+```
+[2026-01-01T00:00:00.000Z] INFO: GET /welcome 200 1ms
+[2026-01-01T00:00:00.000Z] WARN: GET /hello 404 0ms
+```
+
+The four fields are the method, the request target, the status code and the elapsed time, and
+the level follows the status — `INFO` for 2xx, `WARN` for 4xx, `ERROR` for 5xx.
+
+`logRequest` is the only call site that writes a request target, which is the only
+client-controlled value in the log, so the sanitizing happens there and only there:
+
+- **Query strings and fragments are redacted.** Everything from the first `?` or `#` becomes
+  the fixed marker `?[redacted]`, so `GET /welcome?token=abc123` records as
+  `GET /welcome?[redacted] 200 0ms`. The presence of a query stays visible while its values
+  never reach the log — query parameters routinely carry tokens, passwords, API keys and
+  session identifiers (CWE-532).
+- **The retained path is capped** at 256 characters, with `...[truncated]` appended, so no
+  single caller can write an unbounded record (CWE-779). A 7 000-character path produces a
+  326-character record.
+- **The target is written once per request.** `handlers/error.js`'s 404, 405 and 500 records
+  name the request method alone and leave the target to the access record, so an unregistered
+  path logs `WARN: Not Found: GET` beside the access record rather than repeating the raw
+  value.
+
+A target with no query or fragment and within the cap is recorded verbatim, so the endpoint's
+own access record reads exactly `GET /welcome 200 1ms`. Requests rejected before they reach
+the application are recorded by `server.js`'s `clientError` listener, which logs the parser's
+error code and no client bytes. The sanitizer is module-private: this hardening added no
+export to `utils/logger.js`, whose surface stays `info`, `warn`, `error`, `logServerStart`,
+`logServerStop` and `logRequest`.
 
 ## License
 

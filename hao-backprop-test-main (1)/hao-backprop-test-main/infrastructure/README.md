@@ -225,9 +225,39 @@ bash ./scripts/health-check.sh --host localhost --port 3000
 
 # Verbose health check
 bash ./scripts/health-check.sh --verbose
+
+# Print the option list and exit without running a check
+bash ./scripts/health-check.sh --help
 ```
 
 The script checks if the `/welcome` endpoint returns "Welcome to HelloGHES" with a 200 OK status code.
+
+### Options, validation and exit codes
+
+Its options are `--host HOST`, `--port PORT`, `--timeout SEC`, `--verbose` and `--help`. There
+is no flag for the endpoint or the expected response body — both are literals inside the
+script, which is why a change of endpoint is an edit to `scripts/health-check.sh` rather than a
+different invocation. `deploy.sh` passes only `--host`, `--port` and `--timeout`, so it inherits
+whatever those literals say.
+
+`--port` and `--timeout` are validated before they are used: each must be a whole number,
+`--port` within 1-65535 and `--timeout` within 1-300 seconds. A value outside that is reported
+as `The --port option must be a whole number between 1 and 65535, got '<value>'.`, followed by
+the usage text, with exit 1 — an operator's typo is no longer reported as
+`curl command failed with exit code 3. Check if the server is running.` against a service that
+is in fact healthy. Two details of the accepted ranges are deliberate:
+
+- The port floor is **1**, not the 1024 that `setup.sh` and `start-server.sh` enforce for their
+  own `-p`. Those two *bind* the port, where anything below 1024 needs privilege; this script
+  only *connects* to one, and `deploy.sh` probes port 80 for a `--env production` deployment, so
+  a 1024 floor here would make the deployment gate reject its own port.
+- The timeout floor is **1 second**, because `curl -m 0` means no timeout at all rather than an
+  instant one. Accepting 0 would silently retire the bound this gate advertises.
+
+The script exits **0** when the check passes and when `--help` is requested, and **1** when the
+check fails, when an option is rejected or when `curl` is missing. A requested help screen
+prints to stdout and runs no check, matching the `--help` paths of `setup.sh` and
+`start-server.sh`, which also exit 0.
 
 ## Docker Compose Configuration
 

@@ -321,6 +321,42 @@ By default, the application uses the native HTTP implementation. To use the Expr
 - **Error Handler**: Manages error conditions and generates appropriate error responses
 - **Middleware**: Provides logging, security headers, and other cross-cutting concerns
 
+### Request Logging
+
+Every record follows one grammar, `[<ISO timestamp>] <LEVEL>: <message>`, and is written to
+stdout (`INFO`), stderr (`ERROR`) or the console's warning stream (`WARN`). One request
+produces exactly one **access record**, emitted when the response ends:
+
+```
+[2026-01-01T00:00:00.000Z] INFO: GET /welcome 200 1ms
+[2026-01-01T00:00:00.000Z] WARN: GET /hello 404 0ms
+```
+
+The four fields are the method, the request target, the status code and the elapsed time. The
+level follows the status: `INFO` for 2xx, `WARN` for 4xx, `ERROR` for 5xx.
+
+The request target is the only client-controlled value in the log, so it is the only one that
+is sanitized, and it is sanitized at the single point that writes it:
+
+- **Query strings and fragments are redacted, not recorded.** Everything from the first `?` or
+  `#` is replaced by the fixed marker `?[redacted]`, so `GET /welcome?token=abc123` is
+  recorded as `GET /welcome?[redacted] 200 0ms`. The presence of a query stays visible to an
+  operator while its values never reach the log — query parameters routinely carry tokens,
+  passwords, API keys and session identifiers (CWE-532, insertion of sensitive information
+  into log data).
+- **The target is length-capped.** The retained path is truncated at 256 characters with the
+  marker `...[truncated]`, so one caller cannot inflate a record without bound (CWE-779). A
+  7 000-character request path yields a 326-character record instead of a 7 066-character one.
+- **The target is recorded once per request.** The 404, 405 and 500 error records name the
+  request *method* only and leave the target to the access record, so no client-controlled
+  value is written twice. A request to an unregistered path therefore logs
+  `WARN: Not Found: GET` alongside the access record above.
+
+An ordinary target — no query, no fragment, within the cap — is recorded verbatim, so the
+access record for the endpoint reads exactly `GET /welcome 200 1ms`. Requests rejected before
+they reach the application are recorded by the connection-boundary listener, which logs the
+parser's own error code and no client bytes at all.
+
 ## Development
 
 ### Running Tests
@@ -338,15 +374,18 @@ cd src/backend
 npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand \
   --testPathPattern "(handlers/welcomeHandler|integration/api|utils/constants|errorHandler|handlers/error)"
 
-# Run every suite. This exits 1: 10 suites, 6 passing and 4 failing; 103 tests, 85 passing and
+# Run every suite. This exits 1: 10 suites, 6 passing and 4 failing; 113 tests, 95 passing and
 # 18 failing. Every failure is pre-existing and unrelated to the /welcome endpoint — see
 # "Pre-existing test failures" below.
 npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand
 
 # Coverage report. Both per-file thresholds are met — handlers/welcomeHandler.js at 100% on
 # all four metrics and handlers/error.js at its 90/100/90/90 — so the only threshold messages
-# are the four global ones: statements 78.41% against 85, branches 77.69% against 80, lines
-# 78.65% against 85 and functions 73.68% against 90. Those four are why this exits 1.
+# are the four global ones: statements 80.22% against 85, branches 78.28% against 80, lines
+# 80.44% against 85 and functions 77.41% against 90. Those four are why this exits 1. The
+# access-record tests take utils/logger.js to 100/95.83/100/100, while the deferred
+# notice-drain fallbacks in config.js are unreachable from the suites, so the global branch
+# figure stays just under its threshold.
 npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand --coverage
 
 # Re-run on change. Interactive, so it does not exit on its own.
@@ -366,7 +405,9 @@ whose repair lies outside this service's scope. By cause, as measured:
   fail on their console assertions with `Received number of calls: 0`, because those methods
   *are* exported but `log()` returns early in the test environment, so nothing reaches the
   console under Jest; the emitted `[timestamp] INFO: message` format also does not match the
-  `[timestamp] [INFO] message` the suite expects.
+  `[timestamp] [INFO] message` the suite expects. The nine access-record tests in the same
+  file all pass: they load the logger in an isolated module registry against a configuration
+  double, which is what lifts the test-environment suppression and makes a record assertable.
 - **`__tests__/server.test.js` — 5 lifecycle failures.** Four assert on `logger.error`,
   `logger.logServerStart` or `logger.logServerStop` and see zero calls, because `server.js`
   destructures those functions at require time, so spying on the logger object afterwards
@@ -383,19 +424,18 @@ whose repair lies outside this service's scope. By cause, as measured:
 `__tests__/config.test.js` is no longer among the failing suites. Its require depth is
 corrected, so the suite loads and all 15 of its cases pass; four suites fail, not five.
 
-The global coverage shortfall follows from which suites load, not from the rename: `index.js`
-covers 23.07%, `config.js` 85.33% of statements but only 76.59% of branches,
-`middleware/index.js` 93.54% of lines but only 66.66% of branches, `utils/logger.js` 72.72% of
-statements and 57.14% of branches, and the never-loaded `__tests__/setup.js` sits at 0% while
-still being collected. `router.js`, `utils/constants.js`, `errorHandler.js`,
-`handlers/error.js` and `handlers/welcomeHandler.js` are all at 100%, and `server.js` at
-91.66%.
+The remaining global coverage shortfall follows from which suites load, not from the rename:
+`index.js` covers 23.07%, `config.js` 78.26% of statements but only 66.1% of branches,
+`middleware/index.js` 93.54% of lines but only 66.66% of branches, and the never-loaded
+`__tests__/setup.js` sits at 0% while still being collected. `router.js`,
+`utils/constants.js`, `errorHandler.js`, `handlers/error.js`, `handlers/welcomeHandler.js`
+and `utils/logger.js` are all at 100% of statements and lines, and `server.js` at 91.66%.
 
 Two `url: '/hello'` fixtures are kept deliberately in `__tests__/handlers/error.test.js` — one
 in the 405 test and one in the 500 test. They describe an arbitrary request URL rather than a
 route, and the retired path makes them more accurate, not less; the 404 test in the same file
-uses `url: '/unknown'`. See [src/backend/README.md](src/backend/README.md) for the per-test
-detail.
+uses `url: '/unknown'`. Both fixtures now also serve as assertions that the record does *not*
+echo them. See [src/backend/README.md](src/backend/README.md) for the per-test detail.
 
 ### Linting
 

@@ -60,6 +60,19 @@ const PORT_PATTERN = /^[0-9]+$/;
  * an empty object with no callable levels. That case defers the drain by exactly one
  * `process.nextTick`, by which time the logger has finished evaluating. Nothing here
  * ever writes to `console` directly: a raw sink is the defect this design removes.
+ *
+ * The deferred half of that drain never touches the module loader. A `process.nextTick`
+ * callback outlives the stack that scheduled it, and under a test runner it can outlive
+ * the module registry as well: Jest tears its environment down as soon as a test file's
+ * last assertion resolves, and a `require` issued afterwards is reported as
+ * "You are trying to `import` a file after the Jest environment has been torn down" -
+ * printed by the runtime itself with `process.exitCode` set to 1, so no `try`/`catch`
+ * around the require can intercept it. The retry therefore captures the logger's module
+ * RECORD synchronously, while the loader is demonstrably usable, and the deferred
+ * callback only reads that record's `exports` property. A property read is inert
+ * whatever has become of the loader, and the record's `exports` is live - it is the
+ * binding `module.exports = logger` assigns at the end of `utils/logger.js` - so the
+ * finished logger is what the notice is delivered through.
  */
 
 /**
@@ -104,29 +117,68 @@ let retryScheduled = false;
 let loggerLoadFailure = null;
 
 /**
- * Resolves the logger lazily and reports whether it is usable as a sink.
+ * The logger's module record, captured while the loader was still usable.
+ *
+ * Held only for the one deferred drain: `scheduleNoticeRetry()` captures it on the
+ * synchronous path and `drainDeferredNotices()` reads its `exports` on the next tick,
+ * which is what keeps the deferred callback out of the module system entirely. Null
+ * means no record could be captured, and therefore that no retry was scheduled.
+ *
+ * @type {NodeModule|null}
+ */
+let deferredLoggerModule = null;
+
+/**
+ * Captures the logger's module record from the loader's cache, without loading anything.
+ *
+ * Every CommonJS loader registers a module record BEFORE it executes the module body -
+ * that is the mechanism a circular require relies on - and Jest's registry behaves the
+ * same way, with `require.cache` exposed as a live proxy over it. So in the reverse
+ * cycle, where the logger is mid-evaluation because it is what triggered this module's
+ * evaluation, its record is already present and its `exports` is the binding the
+ * logger's final `module.exports = logger` assigns. Capturing the record rather than the
+ * exports object is what makes that reassignment visible: the empty object handed back
+ * during the cycle is stale forever, and caching it would silently discard the notice.
+ *
+ * Returns null rather than throwing on any host that does not expose a require cache, or
+ * cannot resolve the logger's path, because a missing log line must never fail
+ * configuration resolution.
+ *
+ * @returns {NodeModule|null} The logger's module record, or null when unobtainable
+ */
+function captureLoggerModule() {
+  // A loader without a cache (a bundler's shim, an embedded runtime) cannot hand back a
+  // record, so there is nothing a later tick could read.
+  if (!require.cache) {
+    return null;
+  }
+
+  try {
+    return require.cache[require.resolve('./utils/logger')] || null;
+  } catch (resolveError) {
+    // `require.resolve` throws when the module cannot be located at all - the same
+    // condition `resolveLogger()` records as a load failure. Silent here: the notices
+    // stay queued, which is this module's documented fallback.
+    return null;
+  }
+}
+
+/**
+ * Reports whether a candidate module's exports can accept a notice.
  *
  * Usable means an object exposing at least one of `info`, `warn` or `error` as a
  * function. An empty object means the logger is mid-evaluation because it is the entry
  * point that required this module (the reverse cycle described above), not that the
  * logger is broken.
  *
- * @returns {object|null} The logger module when it can accept a notice, otherwise null
+ * Shared by both drain entry points so that the synchronous flush and the deferred
+ * retry accept exactly the same shapes - and so that neither of them assumes anything
+ * about the logger beyond those three levels, which is all this module needs from it.
+ *
+ * @param {any} candidate - Value a loader or a module record handed back as the logger
+ * @returns {object|null} The candidate when it can accept a notice, otherwise null
  */
-function resolveLogger() {
-  let candidate;
-
-  try {
-    // Deferred deliberately: by the time this runs, `require('../config')` inside the
-    // logger resolves to this module's complete exports.
-    candidate = require('./utils/logger');
-  } catch (loadError) {
-    // Configuration resolution must not fail because a log line could not be written,
-    // so the notices stay queued and the reason is remembered for the retry decision.
-    loggerLoadFailure = loadError.message;
-    return null;
-  }
-
+function asNoticeSink(candidate) {
   if (!candidate || typeof candidate !== 'object') {
     return null;
   }
@@ -150,11 +202,42 @@ function resolveLogger() {
 }
 
 /**
+ * Resolves the logger lazily and reports whether it is usable as a sink.
+ *
+ * Every caller of this function is on the synchronous path - this module's own
+ * evaluation, driven by `notify()` and by the flush that follows the export assignment -
+ * where the loader is demonstrably usable because it is the loader that is running this
+ * file. The deferred drain deliberately does not come through here: it reads the module
+ * record captured for it instead, so that no `require` is ever issued from a
+ * `process.nextTick` callback.
+ *
+ * @returns {object|null} The logger module when it can accept a notice, otherwise null
+ */
+function resolveLogger() {
+  let candidate;
+
+  try {
+    // Deferred deliberately: by the time this runs, `require('../config')` inside the
+    // logger resolves to this module's complete exports.
+    candidate = require('./utils/logger');
+  } catch (loadError) {
+    // Configuration resolution must not fail because a log line could not be written,
+    // so the notices stay queued and the reason is remembered for the retry decision.
+    loggerLoadFailure = loadError.message;
+    return null;
+  }
+
+  return asNoticeSink(candidate);
+}
+
+/**
  * Schedules the one and only retry of the queue drain, on the next tick.
  *
  * Used for the reverse require cycle, where the logger has not finished evaluating yet.
- * A notice that cannot be delivered even then stays queued and is never emitted, which
- * is preferred over a raw console write.
+ * The logger's module record is captured here, synchronously, because this is the last
+ * moment at which the loader is known to be usable; the retry is scheduled only when
+ * there is a record for it to read. When there is none, the notices stay queued and are
+ * never emitted, which is preferred over a raw console write.
  *
  * @returns {void}
  */
@@ -163,30 +246,60 @@ function scheduleNoticeRetry() {
     return;
   }
 
+  deferredLoggerModule = captureLoggerModule();
+
+  if (!deferredLoggerModule) {
+    // Nothing a later tick could read, so scheduling one would only burn a tick and,
+    // under a test runner, risk running after the environment is gone. `retryScheduled`
+    // stays false: a subsequent synchronous `notify()` may still find the loader in a
+    // state where a record can be captured.
+    return;
+  }
+
   retryScheduled = true;
-  process.nextTick(flushPendingNotices);
+  process.nextTick(drainDeferredNotices);
 }
 
 /**
- * Delivers every queued notice through the logger, in the order it was raised.
+ * Drains the queue on the next tick, through the module record captured for it.
  *
- * Returns immediately while the queue is empty or the configuration has not been
- * published, which is what keeps the logger from reading half-initialised exports.
+ * Contains no `require` call, and must not acquire one. This callback outlives the stack
+ * that scheduled it and, under a test runner, the module registry itself: Jest reports a
+ * require issued after its environment has been torn down by printing a `ReferenceError`
+ * and setting `process.exitCode = 1` from inside the runtime, which no `try`/`catch` in
+ * this module can intercept. Reading `exports` off a record captured earlier is a plain
+ * property access, so it is inert whatever has become of the loader, and it still sees
+ * the finished logger because `module.exports = logger` writes to that same record.
  *
  * @returns {void}
  */
-function flushPendingNotices() {
+function drainDeferredNotices() {
   if (pendingNotices.length === 0 || !configurationPublished) {
     return;
   }
 
-  const logger = resolveLogger();
+  const logger = asNoticeSink(deferredLoggerModule.exports);
 
   if (!logger) {
-    scheduleNoticeRetry();
+    // The logger never finished exporting a usable sink - it threw while evaluating, or
+    // the environment discarded it. There is no second retry by design, so the notices
+    // stay queued and silent.
     return;
   }
 
+  deliverQueuedNotices(logger);
+}
+
+/**
+ * Writes every queued notice to the resolved sink, in the order it was raised.
+ *
+ * The queue is drained from the front and each notice is removed only once it has been
+ * written, so a sink that fails mid-queue leaves the remaining notices in order.
+ *
+ * @param {object} logger - Sink accepted by `asNoticeSink`, keyed by notice level
+ * @returns {void}
+ */
+function deliverQueuedNotices(logger) {
   while (pendingNotices.length > 0) {
     const notice = pendingNotices[0];
     const sink = logger[notice.level];
@@ -210,6 +323,30 @@ function flushPendingNotices() {
       return;
     }
   }
+}
+
+/**
+ * Delivers every queued notice through the logger, in the order it was raised.
+ *
+ * The synchronous entry point, called from `notify()` and once more after the export
+ * assignment. Returns immediately while the queue is empty or the configuration has not
+ * been published, which is what keeps the logger from reading half-initialised exports.
+ *
+ * @returns {void}
+ */
+function flushPendingNotices() {
+  if (pendingNotices.length === 0 || !configurationPublished) {
+    return;
+  }
+
+  const logger = resolveLogger();
+
+  if (!logger) {
+    scheduleNoticeRetry();
+    return;
+  }
+
+  deliverQueuedNotices(logger);
 }
 
 /**

@@ -2,7 +2,7 @@
  * Request Router module for Node.js Hello World application
  * 
  * This module examines incoming HTTP requests and directs them to the appropriate
- * handler based on the URL path. It implements routing logic for the /hello
+ * handler based on the URL path. It implements routing logic for the /welcome
  * endpoint and handles 404 responses for undefined routes.
  */
 
@@ -10,7 +10,7 @@
 const url = require('url'); // built-in
 
 // Import application modules
-const { handleHelloRequest } = require('./handlers/helloHandler');
+const { handleWelcomeRequest } = require('./handlers/welcomeHandler');
 const { handle404 } = require('./errorHandler');
 const { ROUTES } = require('./utils/constants');
 const logger = require('./utils/logger');
@@ -26,9 +26,9 @@ function matchRoute(path) {
     ? path.slice(0, -1) 
     : path;
   
-  // Check if the path matches the hello endpoint
-  if (normalizedPath === ROUTES.HELLO) {
-    return handleHelloRequest;
+  // Check if the path matches the welcome endpoint
+  if (normalizedPath === ROUTES.WELCOME) {
+    return handleWelcomeRequest;
   }
   
   // No match found

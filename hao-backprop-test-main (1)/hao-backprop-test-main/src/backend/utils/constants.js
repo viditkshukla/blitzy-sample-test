@@ -28,8 +28,8 @@ const HTTP_STATUS = {
  * Route path constants
  */
 const ROUTES = {
-  /** Hello endpoint route */
-  HELLO: '/hello'
+  /** Welcome endpoint route */
+  WELCOME: '/welcome'
 };
 
 /**
@@ -46,8 +46,10 @@ const CONFIG = {
  * Message string constants for responses and logging
  */
 const MESSAGES = {
-  /** Response text for the hello endpoint */
-  HELLO_RESPONSE: 'Hello world',
+  /** Heading text displayed on the welcome screen */
+  WELCOME_HEADING: 'Welcome to HelloGHES',
+  /** Short description displayed beneath the welcome screen heading */
+  WELCOME_DESCRIPTION: 'A simple Node.js service that greets you from the /welcome endpoint.',
   /** Message for 404 Not Found responses */
   NOT_FOUND: 'Not Found',
   /** Message for 405 Method Not Allowed responses */
@@ -66,6 +68,8 @@ const HEADERS = {
   CONTENT_TYPE: 'Content-Type',
   /** Content-Type value for plain text responses */
   CONTENT_TYPE_TEXT: 'text/plain',
+  /** Content-Type value for HTML responses */
+  CONTENT_TYPE_HTML: 'text/html; charset=utf-8',
   /** Allow header for Method Not Allowed responses */
   ALLOW: 'Allow'
 };
@@ -78,7 +82,6 @@ const HTTP_METHODS = {
   GET: 'GET'
 };
 
-// Export all constants for use throughout the application
 module.exports = {
   HTTP_STATUS,
   ROUTES,

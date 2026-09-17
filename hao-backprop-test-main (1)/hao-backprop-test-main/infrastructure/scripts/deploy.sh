@@ -87,14 +87,21 @@ check_prerequisites() {
     fi
     log_verbose "curl is installed."
     
-    # Check health-check.sh exists and is executable
+    # Check health-check.sh exists and is readable
     if [ ! -f "$SCRIPT_DIR/health-check.sh" ]; then
         log_error "health-check.sh not found in $SCRIPT_DIR"
         return 1
     fi
     
-    if [ ! -x "$SCRIPT_DIR/health-check.sh" ]; then
-        log_error "health-check.sh is not executable. Run: chmod +x $SCRIPT_DIR/health-check.sh"
+    # verify_deployment runs the gate through the bash interpreter, the same way
+    # the runbooks publish it, so readability is the real prerequisite. The
+    # scripts are committed mode 100755, but requiring the executable bit here
+    # aborted the entire deployment - before a single deployment step ran -
+    # whenever a checkout did not carry it, which was every clone while the
+    # scripts were committed 100644 and is still any distribution path that
+    # drops file modes. Readability is what bash actually needs.
+    if [ ! -r "$SCRIPT_DIR/health-check.sh" ]; then
+        log_error "health-check.sh is not readable: $SCRIPT_DIR/health-check.sh"
         return 1
     fi
     
@@ -242,7 +249,7 @@ verify_deployment() {
     for ((i=1; i<=HEALTH_CHECK_RETRIES; i++)); do
         log_verbose "Health check attempt $i of $HEALTH_CHECK_RETRIES"
         
-        if "$SCRIPT_DIR/health-check.sh" --host "$APP_HOST" --port "$APP_PORT" --timeout 5; then
+        if bash "$SCRIPT_DIR/health-check.sh" --host "$APP_HOST" --port "$APP_PORT" --timeout 5; then
             log_info "Health check passed. Application is running correctly."
             return 0
         else

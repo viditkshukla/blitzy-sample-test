@@ -55,8 +55,43 @@ describe('handleNotFound', () => {
     // Assert response body is "Not Found"
     expect(res.end).toHaveBeenCalledWith('Not Found');
     
-    // Assert warning is logged with correct message
-    expect(warn).toHaveBeenCalledWith(`Not Found: ${req.method} ${req.url}`);
+    // Assert warning is logged with correct message. The record names the
+    // method and deliberately omits the request target: the access record from
+    // the request logger already carries it, redacted and length-capped, so
+    // repeating the raw value here would write a client-controlled string to
+    // the log twice.
+    expect(warn).toHaveBeenCalledWith(`Not Found: ${req.method}`);
+  });
+
+  test('should keep the client-controlled request target out of the log record', () => {
+    // A target carrying a credential in its query string and a path far longer
+    // than any route: neither may appear in this record, whatever its content.
+    const req = {
+      method: 'GET',
+      url: `/${'Z'.repeat(7000)}?token=SECRET_TOKEN_VALUE&password=hunter2`
+    };
+
+    const res = {
+      statusCode: 200,
+      setHeader: jest.fn(),
+      end: jest.fn()
+    };
+
+    handleNotFound(req, res);
+
+    // The response contract is unaffected by what is recorded
+    expect(res.statusCode).toBe(404);
+    expect(res.end).toHaveBeenCalledWith('Not Found');
+
+    // Exactly one record, and it carries no part of the target
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    const record = warn.mock.calls[0][0];
+
+    expect(record).toBe('Not Found: GET');
+    expect(record).not.toContain('SECRET_TOKEN_VALUE');
+    expect(record).not.toContain('hunter2');
+    expect(record).not.toContain('Z');
   });
 });
 
@@ -92,8 +127,12 @@ describe('handleMethodNotAllowed', () => {
     // Assert response body is "Method Not Allowed"
     expect(res.end).toHaveBeenCalledWith('Method Not Allowed');
     
-    // Assert warning is logged with correct message
-    expect(warn).toHaveBeenCalledWith(`Method Not Allowed: ${req.method} ${req.url} - Allowed methods: GET, POST`);
+    // Assert warning is logged with correct message. As with the 404 record,
+    // the request target is left to the access record rather than duplicated
+    // here; `req.url` above stands for an arbitrary request URL and is
+    // deliberately kept as a fixture the record must not echo.
+    expect(warn).toHaveBeenCalledWith(`Method Not Allowed: ${req.method} - Allowed methods: GET, POST`);
+    expect(warn.mock.calls[0][0]).not.toContain(req.url);
   });
 });
 
@@ -129,7 +168,11 @@ describe('handleServerError', () => {
     // Assert response body is "Internal Server Error"
     expect(res.end).toHaveBeenCalledWith('Internal Server Error');
     
-    // Assert error is logged with correct message and error object
-    expect(error).toHaveBeenCalledWith(`Server Error processing ${req.method} ${req.url}`, err);
+    // Assert error is logged with correct message and error object. The
+    // request target is left to the access record here too — this handler is
+    // reachable from a request, so a raw target in this record would be
+    // client-controlled as well.
+    expect(error).toHaveBeenCalledWith(`Server Error processing ${req.method}`, err);
+    expect(error.mock.calls[0][0]).not.toContain(req.url);
   });
 });

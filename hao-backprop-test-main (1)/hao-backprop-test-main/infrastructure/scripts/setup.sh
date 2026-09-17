@@ -12,7 +12,8 @@ set -e  # Exit immediately if a command exits with a non-zero status
 # Global variables
 SCRIPT_DIR=$(dirname "$0")
 PROJECT_ROOT=$(realpath "$SCRIPT_DIR/../..")
-BACKEND_DIR=$PROJECT_ROOT/src
+BACKEND_DIR=$PROJECT_ROOT/src/backend
+MANIFEST_DIR=$PROJECT_ROOT  # Directory holding the project's package.json
 MIN_NODE_VERSION="18.0.0"
 DEFAULT_PORT="3000"
 LOG_DIR=$PROJECT_ROOT/logs
@@ -81,7 +82,8 @@ parse_arguments() {
             e)
                 NODE_ENV=$OPTARG
                 if [[ ! "$NODE_ENV" =~ ^(development|production|test)$ ]]; then
-                    echo -e "${YELLOW}Warning: Unusual environment specified: $NODE_ENV${NC}"
+                    echo -e "${RED}Error: Environment must be one of: development, production, test${NC}" >&2
+                    exit 1
                 fi
                 ;;
             s)
@@ -127,7 +129,6 @@ parse_arguments() {
 check_node_version() {
     echo -e "${BLUE}Checking Node.js version...${NC}"
     
-    # Check if node is installed
     if ! command -v node &> /dev/null; then
         echo -e "${RED}Error: Node.js is not installed or not in the PATH${NC}"
         echo "Please install Node.js version $MIN_NODE_VERSION or higher"
@@ -135,12 +136,11 @@ check_node_version() {
         return 1
     fi
     
-    # Get current Node.js version
     CURRENT_VERSION=$(node --version | cut -d "v" -f 2)
     echo "Current Node.js version: $CURRENT_VERSION"
     
     # Compare versions
-    if [ "$(printf '%s\n' "$MIN_NODE_VERSION" "$CURRENT_VERSION" | sort -V | head -n1)" != "$MIN_NODE_VERSION" ]; then
+    if [ "$(printf '%s\n' "$MIN_NODE_VERSION" "$CURRENT_VERSION" | sort -V | head -n1)" = "$MIN_NODE_VERSION" ]; then
         echo -e "${GREEN}✓ Node.js version is adequate${NC}"
         return 0
     else
@@ -175,29 +175,126 @@ check_npm() {
 
 # ==============================================================================
 # Function: install_dependencies
-# Description: Installs Node.js dependencies using npm
+# Description: Installs Node.js dependencies using npm, run from MANIFEST_DIR so that the
+#              install is driven by this project's package.json
 # Returns:
 #   0 if installation was successful, 1 otherwise
 # ==============================================================================
 install_dependencies() {
     echo -e "${BLUE}Installing dependencies...${NC}"
     
-    # Change to the backend directory
-    cd "$BACKEND_DIR" || {
-        echo -e "${RED}Error: Could not change to backend directory: $BACKEND_DIR${NC}"
+    cd "$MANIFEST_DIR" || {
+        echo -e "${RED}Error: Could not change to manifest directory: $MANIFEST_DIR${NC}"
         return 1
     }
     
-    # Run npm install
     echo "Running npm install in $(pwd)"
     if npm install; then
         echo -e "${GREEN}✓ Dependencies installed successfully${NC}"
         return 0
     else
         echo -e "${RED}Error: Failed to install dependencies${NC}"
-        echo "Try running 'npm install' manually in the $BACKEND_DIR directory"
+        echo "Try running 'npm install' manually in the $MANIFEST_DIR directory"
         return 1
     fi
+}
+
+# ==============================================================================
+# Function: set_env_value
+# Description: Writes KEY=VALUE into ENV_FILE, replacing the first line that starts with
+#              "KEY=" and appending the assignment when no such line exists. The key and
+#              the value reach awk through the environment, so neither is ever read as a
+#              pattern or as a replacement escape: a value containing /, & or \ is written
+#              verbatim, which an in-place `sed "s/KEY=.*/KEY=$VALUE/"` cannot do. The
+#              rewrite is built in a temporary file beside ENV_FILE and moved into place,
+#              and the result is read back before success is reported, so a failed write
+#              can never be mistaken for an applied value.
+# Parameters:
+#   $1 - Environment variable name to set
+#   $2 - Value to assign, written verbatim
+# Usage:
+#   set_env_value "NODE_ENV" "production" || return 1
+# Returns:
+#   0 when ENV_FILE contains exactly the line "KEY=VALUE", 1 on any failure
+# ==============================================================================
+set_env_value() {
+    local key=$1
+    local value=$2
+    local file=$ENV_FILE
+    local tmp_file
+    
+    if ! [[ $key =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        echo -e "${RED}Error: Invalid environment variable name: $key${NC}" >&2
+        return 1
+    fi
+    
+    # A newline in the value would write a second line into the file, which no reader
+    # would attribute to this key
+    if [ "$value" != "${value//$'\n'/}" ]; then
+        echo -e "${RED}Error: Value for $key must not contain a newline${NC}" >&2
+        return 1
+    fi
+    
+    if [ ! -f "$file" ]; then
+        echo -e "${RED}Error: Environment file not found: $file${NC}" >&2
+        return 1
+    fi
+    
+    tmp_file=$(mktemp "$file.XXXXXX") || {
+        echo -e "${RED}Error: Could not create a temporary file beside $file${NC}" >&2
+        return 1
+    }
+    
+    if ! ENV_KEY=$key ENV_VALUE=$value awk '
+        BEGIN {
+            prefix = ENVIRON["ENV_KEY"] "="
+            value = ENVIRON["ENV_VALUE"]
+            replaced = 0
+        }
+        {
+            if (!replaced && substr($0, 1, length(prefix)) == prefix) {
+                print prefix value
+                replaced = 1
+            } else {
+                print
+            }
+        }
+        END {
+            if (!replaced) {
+                print prefix value
+            }
+        }
+    ' "$file" > "$tmp_file"; then
+        rm -f "$tmp_file"
+        echo -e "${RED}Error: Failed to rewrite $file with $key=$value${NC}" >&2
+        return 1
+    fi
+    
+    # Owner-only access on the replacement, unconditionally. This helper rewrites nothing
+    # but ENV_FILE (see `local file=$ENV_FILE` above), the dotenv file config.js loads and
+    # therefore the place an operator puts a local credential, so there is no mode worth
+    # carrying over from the file being replaced: preserving it would let a permissive
+    # mode survive every write, and depending on `chmod --reference` would leave the
+    # tightening to whether that option is supported.
+    if ! chmod 600 "$tmp_file"; then
+        rm -f "$tmp_file"
+        echo -e "${RED}Error: Failed to restrict permissions on the replacement for $file${NC}" >&2
+        return 1
+    fi
+    
+    if ! mv "$tmp_file" "$file"; then
+        rm -f "$tmp_file"
+        echo -e "${RED}Error: Failed to update $file with $key=$value${NC}" >&2
+        return 1
+    fi
+    
+    # Read the result back: the value counts as applied only if the exact line is there
+    if ! grep -Fxq -- "$key=$value" "$file"; then
+        echo -e "${RED}Error: $file does not contain $key=$value after the update${NC}" >&2
+        return 1
+    fi
+    
+    return 0
 }
 
 # ==============================================================================
@@ -209,15 +306,28 @@ install_dependencies() {
 setup_environment() {
     echo -e "${BLUE}Setting up environment...${NC}"
     
-    # Create .env file if it doesn't exist
+    # Create .env file if it doesn't exist. dotenv loads this file (src/backend/config.js),
+    # which makes it the file an operator puts a local credential in, so each creation path
+    # narrows the umask to 077 in a subshell first: the file is owner-only from the moment
+    # it exists, with no window in which it is world-readable waiting for a later chmod.
     if [ -f "$ENV_FILE" ]; then
         echo "Environment file (.env) already exists"
     elif [ -f "$ENV_EXAMPLE_FILE" ]; then
         echo "Creating environment file from example template"
-        cp "$ENV_EXAMPLE_FILE" "$ENV_FILE"
+        # A copy takes the template's mode masked by the umask, so the umask is what
+        # decides the result rather than whatever mode .env.example happens to carry
+        if ! ( umask 077; cp "$ENV_EXAMPLE_FILE" "$ENV_FILE" ); then
+            echo -e "${RED}Error: Failed to create environment file from $ENV_EXAMPLE_FILE${NC}" >&2
+            return 1
+        fi
     else
         echo "Creating new environment file"
-        echo "# Node.js Hello World Application Environment Configuration" > "$ENV_FILE"
+        # Create and truncate the file owner-only, then append the content to it
+        if ! ( umask 077; : > "$ENV_FILE" ); then
+            echo -e "${RED}Error: Failed to create environment file: $ENV_FILE${NC}" >&2
+            return 1
+        fi
+        echo "# Node.js Hello World Application Environment Configuration" >> "$ENV_FILE"
         echo "# Created by setup script on $(date)" >> "$ENV_FILE"
         echo "" >> "$ENV_FILE"
         echo "# Server configuration" >> "$ENV_FILE"
@@ -225,21 +335,20 @@ setup_environment() {
         echo "NODE_ENV=$NODE_ENV" >> "$ENV_FILE"
     fi
     
-    # Update PORT in .env if specified
-    if grep -q "PORT=" "$ENV_FILE"; then
-        sed -i.bak "s/PORT=.*/PORT=$PORT/" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-    else
-        echo "PORT=$PORT" >> "$ENV_FILE"
+    # The mode belongs to the file, not to the run that created it: an .env left behind at
+    # a permissive mode by an earlier run is tightened here too, which also closes any gap
+    # the copy above could leave
+    if ! chmod 600 "$ENV_FILE"; then
+        echo -e "${RED}Error: Failed to restrict permissions on environment file: $ENV_FILE${NC}" >&2
+        return 1
     fi
+    
+    # Update PORT in .env if specified
+    set_env_value "PORT" "$PORT" || return 1
     
     # Update NODE_ENV in .env if specified
-    if grep -q "NODE_ENV=" "$ENV_FILE"; then
-        sed -i.bak "s/NODE_ENV=.*/NODE_ENV=$NODE_ENV/" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-    else
-        echo "NODE_ENV=$NODE_ENV" >> "$ENV_FILE"
-    fi
+    set_env_value "NODE_ENV" "$NODE_ENV" || return 1
     
-    # Create logs directory if it doesn't exist
     if [ ! -d "$LOG_DIR" ]; then
         echo "Creating logs directory: $LOG_DIR"
         mkdir -p "$LOG_DIR" || {
@@ -279,7 +388,7 @@ check_port_availability() {
             echo "You may need to choose a different port with the -p option"
             return 1
         fi
-    # Last resort - try to bind to the port directly
+    # Last resort - attempt a TCP connection to detect an existing listener
     else
         (
             exec 3<> /dev/tcp/localhost/$port
@@ -307,15 +416,18 @@ verify_setup() {
     echo -e "${BLUE}Verifying setup...${NC}"
     local status=0
     
-    # Check if node_modules directory exists
-    if [ -d "$BACKEND_DIR/node_modules" ]; then
+    if [ -d "$MANIFEST_DIR/node_modules" ]; then
         echo -e "${GREEN}✓ Dependencies are installed${NC}"
+    elif [ "$SKIP_DEPS" = true ]; then
+        # The operator declined the install with -s, so missing dependencies are the
+        # requested outcome rather than a setup failure: report and leave status alone
+        echo -e "${YELLOW}! Dependency check skipped because installation was skipped with -s${NC}"
+        echo "Run 'npm install' in $MANIFEST_DIR before starting the server"
     else
         echo -e "${RED}× Dependencies are not installed${NC}"
         status=1
     fi
     
-    # Check if .env file exists
     if [ -f "$ENV_FILE" ]; then
         echo -e "${GREEN}✓ Environment configuration exists${NC}"
     else
@@ -323,7 +435,6 @@ verify_setup() {
         status=1
     fi
     
-    # Check if logs directory exists
     if [ -d "$LOG_DIR" ]; then
         echo -e "${GREEN}✓ Logs directory exists${NC}"
     else
@@ -349,7 +460,6 @@ verify_setup() {
 #   Exit code indicating success (0) or failure (1)
 # ==============================================================================
 main() {
-    # Parse command line arguments
     parse_arguments "$@"
     
     echo -e "${BLUE}==================================================${NC}"
@@ -373,15 +483,13 @@ main() {
         echo -e "${YELLOW}Skipping dependency installation as requested${NC}"
     fi
     
-    # Setup environment
     setup_environment || exit 1
     
     # Check port availability (non-blocking)
-    check_port_availability "$PORT"
+    check_port_availability "$PORT" || true
     
-    # Verify setup
-    verify_setup
-    local setup_status=$?
+    local setup_status=0
+    verify_setup || setup_status=$?
     
     if [ $setup_status -eq 0 ]; then
         echo
@@ -391,8 +499,8 @@ main() {
         echo
         echo "Next steps:"
         echo "1. Navigate to the backend directory: cd $BACKEND_DIR"
-        echo "2. Start the server: npm start"
-        echo "3. Access the service at: http://localhost:$PORT/hello"
+        echo "2. Start the server: PORT=$PORT node index.js"
+        echo "3. Access the service at: http://localhost:$PORT/welcome"
         echo
     else
         echo
@@ -407,5 +515,4 @@ main() {
     return $setup_status
 }
 
-# Execute main function with all script arguments
 main "$@"

@@ -15,13 +15,16 @@ Before using the infrastructure components, ensure you have the following instal
 
 ```
 infrastructure/
-├── docker-compose.yml         # Docker Compose configuration
+├── local/
+│   └── docker-compose.yml     # Docker Compose configuration
 ├── monitoring/
 │   ├── prometheus.yml         # Prometheus configuration
 │   └── grafana-dashboard.json # Grafana dashboard configuration
 └── scripts/
     ├── deploy.sh              # Deployment script
-    └── health-check.sh        # Health check script
+    ├── health-check.sh        # Health check script
+    ├── setup.sh               # Local provisioning script
+    └── start-server.sh        # Server launcher
 ```
 
 ## Deployment Options
@@ -33,31 +36,38 @@ The application can be deployed in several ways, depending on your needs and env
 For local development and testing, you can run the application directly with Node.js:
 
 ```bash
-# Navigate to the backend directory
 cd ../src/backend
 
-# Install dependencies
-npm install
+# No manifest declares the application's dependencies: package.json carries no dependencies
+# and no devDependencies block, so `npm install` on its own installs nothing and `npm ci`
+# creates no node_modules at all. Install the pinned set explicitly; --no-save leaves
+# package.json and package-lock.json unchanged. dotenv is the only one the server needs at
+# runtime and the other three are the test toolchain, but this is the repository's single
+# install recipe — published identically here, in ../README.md and in ../src/backend/README.md
+# — and jest-junit is pinned at 17.0.0 on security grounds, which those files' Installation
+# and Security Audit sections record together with the gap that nothing enforces the pin
+npm install --no-save jest@29.5.0 supertest@6.3.3 dotenv@16.0.3 jest-junit@17.0.0
 
-# Start the application
-npm start
+# No "start" script is defined, and npm start would fall back to the unrelated
+# root server.js demo, so run the backend entry point directly
+node index.js
 ```
 
-The application will be available at http://localhost:3000/hello.
+The application will be available at http://localhost:3000/welcome.
 
 ### Docker Deployment
 
 To deploy the application as a standalone Docker container:
 
 ```bash
-# Build the Docker image
+# The build fails until src/backend carries a manifest: its Dockerfile copies
+# package*.json and runs npm ci, and neither file exists in that directory
 docker build -t hello-node:latest ../src/backend
 
-# Run the container
 docker run -p 3000:3000 -d --name hello-node hello-node:latest
 ```
 
-The application will be available at http://localhost:3000/hello.
+The application will be available at http://localhost:3000/welcome.
 
 To stop the container:
 
@@ -68,22 +78,26 @@ docker rm hello-node
 
 ### Docker Compose Deployment
 
-For a more complete deployment with monitoring, use Docker Compose:
+To deploy the application through Docker Compose:
 
 ```bash
-# Start all services
-docker-compose up -d
+# The Compose file lives in local/, so its path is passed explicitly; it defines
+# the single application service, which builds the root Dockerfile and is
+# blocked by the same missing src/backend manifest
+docker-compose -f local/docker-compose.yml up -d
 ```
 
-This will start:
-- The Node.js Hello World application (http://localhost:3000/hello)
-- Prometheus monitoring (http://localhost:9090)
-- Grafana dashboards (http://localhost:3001, login with admin/admin)
+This starts the one service the Compose file defines:
+- The Node.js Hello World application (http://localhost:3000/welcome)
+
+The Prometheus and Grafana configurations under `monitoring/` are not declared in that file,
+so this command starts neither of them. See [Monitoring](#monitoring) for what those files
+cover and the gap they carry.
 
 To stop all services:
 
 ```bash
-docker-compose down
+docker-compose -f local/docker-compose.yml down
 ```
 
 ### Using the Deployment Script
@@ -91,52 +105,112 @@ docker-compose down
 For convenience, a deployment script is provided that handles different deployment methods:
 
 ```bash
-# Deploy using Docker
-./scripts/deploy.sh --method docker
+# deploy.sh exposes only --env (development|staging|production), --verbose and
+# --help; its pipeline is fixed: build the image, then Docker Compose, then the
+# health check. It aborts at its prerequisite check until health-check.sh is
+# executable (chmod +x scripts/health-check.sh)
+bash ./scripts/deploy.sh --env development
 
-# Deploy using Docker Compose
-./scripts/deploy.sh --method docker-compose
-
-# Deploy locally
-./scripts/deploy.sh --method local
+# The same deployment with verbose logging
+bash ./scripts/deploy.sh --env production --verbose
 ```
 
 For more options:
 
 ```bash
-./scripts/deploy.sh --help
+bash ./scripts/deploy.sh --help
 ```
+
+### Using the Setup and Launcher Scripts
+
+Two further scripts cover a local run without Docker. `setup.sh` provisions the checkout —
+it checks the Node.js and npm prerequisites, installs dependencies unless `-s` is given,
+writes `PORT` and `NODE_ENV` into `.env`, creates the `logs/` directory and probes the
+requested port. `start-server.sh` launches the server, in the foreground by default or in
+the background with `-d`, and on either path it waits for the server to answer on the
+requested port before it reports success. Its bookkeeping is per-port, so two launchers on
+different ports never overwrite each other: the server's output goes to
+`logs/server-$PORT.log` and its pid to `logs/server-$PORT.pid`, while the launcher's own
+transcript goes to `logs/start-server.log`. A launch is refused outright when the pid
+recorded for that port is still alive.
+
+```bash
+# Provision locally on the default port, skipping dependency installation
+bash ./scripts/setup.sh -p 3000 -e development -s
+
+# Start the server in the foreground, then the same in the background
+bash ./scripts/start-server.sh -p 3000
+bash ./scripts/start-server.sh -p 3000 -d
+```
+
+Both accept `-h` (also `--help`) and print their full option list: `-p PORT` and `-e ENV` on
+both, `-s` on `setup.sh`, `-d` and `-v` on `start-server.sh`. `start-server.sh` additionally
+rejects a `-p` value that is not a number between 1024 and 65535. Both also print the service
+URL on success — `setup.sh` as step 3 of its "Next steps" block, `start-server.sh` from a
+single helper used by both its foreground and its detached path — and both publish
+`http://localhost:$PORT/welcome`, the one route
+the application registers. The [Endpoint Reference Record](#endpoint-reference-record) below
+gives the line each of those URLs is printed from.
 
 ## Monitoring
 
-The application includes a basic monitoring setup using Prometheus and Grafana when deployed with Docker Compose.
+The `monitoring/` directory carries a Prometheus scrape configuration and a Grafana dashboard
+definition for the application. Both are configuration only: no Prometheus or Grafana service
+is declared anywhere in this repository, so the Compose file starts neither, and running
+either one means bringing it up yourself with these files supplied to it.
+
+### Known gap: the scrape targets have no producer
+
+`prometheus.yml` scrapes `hello-world-app:3000/metrics` (job `hello-world-app`, every 5s) and
+`hello-world-app:3000/health` (job `hello-world-health`, every 30s). **The application serves
+neither path.** Its route table registers exactly one route, `/welcome`, so both requests
+return `404 Not Found`, and `up{job="hello-world-app"}` and `up{job="hello-world-health"}`
+read `0` against a service that is in fact healthy. The application also carries no metrics
+instrumentation — it declares no dependencies and no metrics library — so every dashboard
+panel querying `http_requests_total`, `http_request_duration_seconds_bucket`,
+`nodejs_memory_usage_bytes`, `nodejs_cpu_usage_percentage`, `nodejs_event_loop_lag_seconds`
+or `process_start_time_seconds` renders empty.
+
+This is a pre-existing gap, recorded here rather than closed:
+
+- Adding a `/metrics` or `/health` endpoint, an exporter or any instrumentation is out of
+  scope for the change that introduced `/welcome`.
+- Deleting the jobs or the panels is not the remedy either. The configuration is retained
+  as the record of what the dashboard expects, and its job and service label values are
+  what every PromQL selector in the dashboard matches on, so removing or renaming either
+  would orphan the dashboard instead of repairing it.
+- The check that does verify this service today is `bash ./scripts/health-check.sh` (see
+  [Health Checks](#health-checks)), which requests `/welcome` and matches the response body.
+  It is a deployment gate rather than a scrape target, so it produces no Prometheus series.
 
 ### Prometheus
 
-Prometheus collects metrics from the application, including:
+`prometheus.yml` defines three scrape jobs — `prometheus` (self-monitoring on
+`localhost:9090/metrics`), `hello-world-app` (`/metrics`) and `hello-world-health`
+(`/health`) — with a 15s default scrape and evaluation interval. Alerting and rule files are
+declared as empty placeholders: no alertmanager is configured and no rule file is loaded. The
+two application jobs are subject to the gap above.
 
-- Request counts and rates
-- Response times
-- Error rates
-- Memory and CPU usage
-- Node.js event loop lag
-
-Access the Prometheus UI at http://localhost:9090 when deployed with Docker Compose.
+Access the Prometheus UI at http://localhost:9090 when you run Prometheus with this
+configuration.
 
 ### Grafana
 
-Grafana provides visualization of the metrics collected by Prometheus through a pre-configured dashboard that includes:
+`grafana-dashboard.json` is a pre-configured dashboard (uid `hello-world-dashboard`) of 13
+panels: one markdown header panel and twelve metric panels —
 
-- Server status (up/down)
-- Request rate
-- Response time distribution
-- Error rate
-- Memory usage
-- CPU usage
-- HTTP status code distribution
-- Event loop lag
+- Application Status and Health Check Status (the two `up` series)
+- Uptime and Total Requests
+- Request Rate, Response Time and Endpoint Traffic
+- HTTP Status Codes and Error Rate
+- Memory Usage, CPU Usage and Event Loop Lag
 
-Access Grafana at http://localhost:3001 and log in with username `admin` and password `admin` when deployed with Docker Compose.
+Its PromQL selectors query `job="hello-world-app"` and `job="hello-world-health"`, exactly
+the job labels `prometheus.yml` sets, so the dashboard and the scrape configuration agree
+with each other; both await a producer per the gap above.
+
+Access Grafana at http://localhost:3001 and log in with username `admin` and password `admin`
+when you run Grafana with this dashboard.
 
 ## Health Checks
 
@@ -144,26 +218,101 @@ A health check script is provided to verify that the application is running corr
 
 ```bash
 # Basic health check
-./scripts/health-check.sh
+bash ./scripts/health-check.sh
 
 # Health check with custom host and port
-./scripts/health-check.sh --host localhost --port 3000
+bash ./scripts/health-check.sh --host localhost --port 3000
 
 # Verbose health check
-./scripts/health-check.sh --verbose
+bash ./scripts/health-check.sh --verbose
+
+# Print the option list and exit without running a check
+bash ./scripts/health-check.sh --help
 ```
 
-The script checks if the `/hello` endpoint returns "Hello world" with a 200 OK status code.
+The script checks if the `/welcome` endpoint returns "Welcome to HelloGHES" with a 200 OK status code.
+
+### Options, validation and exit codes
+
+Its options are `--host HOST`, `--port PORT`, `--timeout SEC`, `--verbose` and `--help`. There
+is no flag for the endpoint or the expected response body — both are literals inside the
+script, which is why a change of endpoint is an edit to `scripts/health-check.sh` rather than a
+different invocation. `deploy.sh` passes only `--host`, `--port` and `--timeout`, so it inherits
+whatever those literals say.
+
+`--port` and `--timeout` are validated before they are used: each must be a whole number,
+`--port` within 1-65535 and `--timeout` within 1-300 seconds. A value outside that is reported
+as `The --port option must be a whole number between 1 and 65535, got '<value>'.`, followed by
+the usage text, with exit 1 — an operator's typo is no longer reported as
+`curl command failed with exit code 3. Check if the server is running.` against a service that
+is in fact healthy. Two details of the accepted ranges are deliberate:
+
+- The port floor is **1**, not the 1024 that `setup.sh` and `start-server.sh` enforce for their
+  own `-p`. Those two *bind* the port, where anything below 1024 needs privilege; this script
+  only *connects* to one, and `deploy.sh` probes port 80 for a `--env production` deployment, so
+  a 1024 floor here would make the deployment gate reject its own port.
+- The timeout floor is **1 second**, because `curl -m 0` means no timeout at all rather than an
+  instant one. Accepting 0 would silently retire the bound this gate advertises.
+
+The script exits **0** when the check passes and when `--help` is requested, and **1** when the
+check fails, when an option is rejected or when `curl` is missing. A requested help screen
+prints to stdout and runs no check, matching the `--help` paths of `setup.sh` and
+`start-server.sh`, which also exit 0.
 
 ## Docker Compose Configuration
 
-The `docker-compose.yml` file defines three services:
+The `docker-compose.yml` file defines one service:
 
 1. **hello-world-app**: The Node.js Hello World application
-2. **prometheus**: Metrics collection and storage
-3. **grafana**: Metrics visualization
 
-The services are connected through a bridge network named `hello-world-network` and configured with appropriate volumes for persistence and configuration.
+It is attached to a bridge network named `hello-world-network`, bind-mounts `../../src/backend`
+over `/app`, keeps the container's `node_modules` on an anonymous volume, and declares a
+`node_modules` named volume that is reserved and currently unused. Its `healthcheck` entry is
+the only container health check in the repository — neither Dockerfile carries a `HEALTHCHECK`
+instruction.
+
+The file also declares the obsolete top-level `version: '3.8'` key at line 1. Compose v2
+ignores the attribute and warns `the attribute version is obsolete, it will be ignored, please
+remove it to avoid potential confusion` on every invocation — `config`, `build`, `up` and
+`down` alike. The key has been there since the file was written and is kept deliberately: it
+has no effect on what Compose resolves, and removing it falls outside the single line
+(the health-check URL) that the `/welcome` change authorizes in this file. Anyone permitted to
+edit the file more widely should delete the line; nothing else depends on it.
+
+## Endpoint Reference Record
+
+Where the endpoint and the deliberately-kept product identifiers appear in this directory,
+with the line each sits on as of this commit. Line numbers drift whenever a file above them
+grows, so each row carries the command that re-derives it.
+
+`local/docker-compose.yml` — `grep -n "hello-world\|/welcome\|^version" local/docker-compose.yml`:
+
+| Line | Content | Status |
+|------|---------|--------|
+| 1 | `version: '3.8'` | Obsolete under Compose v2, ignored, warns on every invocation; deliberately kept |
+| 8 | `hello-world-app:` | Service name — an identifier, not renamed by the `/welcome` change |
+| 12 | `image: hello-world-app:latest` | Image name — identifier, not renamed |
+| 13 | `container_name: hello-world-app` | Container name — identifier, not renamed |
+| 26 | `test: ["CMD", "curl", "-f", "http://localhost:3000/welcome"]` | The only container health check; the one line the `/welcome` change touched |
+| 33 | `- hello-world-network` | Network reference — identifier, not renamed |
+| 36 | `hello-world-network:` | Network definition — identifier, not renamed |
+
+`scripts/` — `grep -n "/welcome" scripts/*.sh`:
+
+| File | Line | Content |
+|------|------|---------|
+| `scripts/setup.sh` | 476 | `echo "3. Access the service at: http://localhost:$PORT/welcome"` |
+| `scripts/start-server.sh` | 291 | `curl -sf -o /dev/null --max-time 2 "http://127.0.0.1:$port/welcome"` — the readiness probe the launcher polls before reporting success, not an operator-facing URL |
+| `scripts/start-server.sh` | 356 | `log_message "INFO" "To access the Welcome endpoint, visit: http://localhost:$PORT/welcome"` — the published access line, emitted from `log_access_url` on both the foreground and the detached path |
+| `scripts/health-check.sh` | 10 | `ENDPOINT="/welcome"`, with `EXPECTED_RESPONSE="Welcome to HelloGHES"` on the line below |
+
+`scripts/health-check.sh:4` also names the endpoint in its header comment. The grep above
+reports it alongside the four rows in the table.
+
+`monitoring/prometheus.yml` and `monitoring/grafana-dashboard.json` contain no endpoint
+reference of either kind: their `hello-world-app` and `hello-world-health` occurrences are job,
+service and selector labels, and their scrape paths are `/metrics` and `/health`. See the
+[known gap](#known-gap-the-scrape-targets-have-no-producer) above.
 
 ## Environment Variables
 
@@ -181,20 +330,23 @@ These can be set in the Docker Compose file or passed to the container at runtim
 
 ### Updating Dependencies
 
-To update the application dependencies:
-
-```bash
-cd ../src/backend
-npm update
-```
+Do not run `npm update` against this checkout. No manifest declares the application's
+dependencies, so npm treats every installed package as extraneous and prunes it: run from
+`../src/backend` it reports `removed 309 packages` and leaves the service unable to start,
+because the runtime `dotenv` goes with them. There is nothing for it to update, either — an
+update here means changing a pinned version in the install recipe published under
+[Local Deployment](#local-deployment) and re-running that command from `../src/backend`. The
+same command is the recovery step if `node_modules` was pruned. It is deliberately not
+repeated in this section: the recipe is published once per file so that a changed pin cannot
+be picked up in one place and missed in another.
 
 ### Rebuilding Containers
 
 After making changes to the application code or dependencies, rebuild the containers:
 
 ```bash
-docker-compose build
-docker-compose up -d
+docker-compose -f local/docker-compose.yml build
+docker-compose -f local/docker-compose.yml up -d
 ```
 
 ## Troubleshooting
@@ -203,14 +355,19 @@ docker-compose up -d
 
 1. Check if the container is running: `docker ps`
 2. Check container logs: `docker logs hello-world-app`
-3. Run the health check script: `./scripts/health-check.sh --verbose`
+3. Run the health check script: `bash ./scripts/health-check.sh --verbose`
 
 ### Monitoring Not Working
 
-1. Check if Prometheus and Grafana containers are running: `docker ps`
-2. Check Prometheus logs: `docker logs prometheus`
-3. Check Grafana logs: `docker logs grafana`
-4. Verify Prometheus can reach the application: http://localhost:9090/targets
+Neither Prometheus nor Grafana is started by the Compose file, so start by confirming you
+brought up the one you are debugging yourself, with the configuration from `monitoring/`.
+
+1. Check if the Prometheus and Grafana containers you started are running: `docker ps`
+2. Check their logs: `docker logs prometheus` and `docker logs grafana`
+3. Check the scrape targets at http://localhost:9090/targets — `hello-world-app` and
+   `hello-world-health` report down even against a healthy service, which is the
+   [known gap](#known-gap-the-scrape-targets-have-no-producer) above rather than a fault
+   to chase
 
 ## References
 

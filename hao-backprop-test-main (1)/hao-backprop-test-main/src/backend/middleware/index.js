@@ -15,7 +15,17 @@ const { handleServerError } = require('../handlers/error');
 
 /**
  * Middleware that logs information about HTTP requests and responses
- * 
+ *
+ * This is the only call site of `logRequest`, and `logRequest` is the only
+ * place in the service that writes a request target to the log — the error
+ * handlers record the method alone. That single point is what makes the target
+ * reliably safe: `logRequest` redacts the query string and caps the length
+ * before the record is written, so no unredacted or unbounded
+ * client-controlled value reaches the log. Emitting a second record carrying
+ * `req.url` here, or at any other call site, would reintroduce both the
+ * credential exposure (CWE-532) and the unbounded record (CWE-779) that the
+ * sanitiser removes.
+ *
  * @param {Object} req - HTTP request object
  * @param {Object} res - HTTP response object
  * @param {Function} next - Function to call the next middleware
@@ -32,7 +42,8 @@ function requestLogger(req, res, next) {
     // Calculate response time
     const responseTime = Date.now() - startTime;
     
-    // Log the request using the logger utility
+    // Log the request using the logger utility, which sanitizes the
+    // client-controlled request target before it reaches the record
     logRequest(req, res, responseTime);
     
     // Call the original end method with the same arguments

@@ -76,7 +76,16 @@ function handleWelcomeRequest(req, res) {
   } else {
     // For non-GET requests, delegate the Method Not Allowed response to the
     // shared 405 handler.
-    logger.error(`Received unsupported ${method} method, expected ${HTTP_METHODS.GET}`);
+    //
+    // The rejection is a routine client error, so it is recorded at warn and
+    // not at error: the access-log line for this same request is already mapped
+    // to warn by its 4xx status code, and the shared error layer logs Method
+    // Not Allowed at warn too. Logging it at error would let ordinary client
+    // method misuse manufacture ERROR volume and trip server error-rate alerts.
+    // The endpoint is named in prose, as it is on the entry line above: this
+    // handler deliberately imports no route constant, because only the route
+    // table needs the path as a value.
+    logger.warn(`Received unsupported ${method} method on /welcome, expected ${HTTP_METHODS.GET}`);
     handle405(res);
   }
 }

@@ -85,6 +85,13 @@ describe('route', () => {
     // outright: a substring match would also accept the leaked
     // '/welcome?param=value', which is the opposite of what this test claims.
     expect(logger.info).toHaveBeenCalledWith(`Routing to handler for path: ${ROUTES.WELCOME}`);
+    // Deliberate literal wire-contract anchor — do not fold this back into
+    // ROUTES.WELCOME. Every other route assertion in this suite reads the same
+    // constant router.js resolves the path from, so a changed route dispatches
+    // elsewhere with the suite still green. AAP 0.3.4's "literals stay in the
+    // constants module" governs source modules, and AAP 0.5.2/0.8.1 require the
+    // path fixtures above to read ROUTES.WELCOME — hence this purely additive line.
+    expect(logger.info).toHaveBeenCalledWith('Routing to handler for path: /welcome');
     expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining('?param=value'));
     
     expect(handleWelcomeRequest).toHaveBeenCalledWith(req, res);

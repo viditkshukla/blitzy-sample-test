@@ -12,6 +12,7 @@
  */
 
 module.exports = {
+  // Use Node.js as the test environment
   testEnvironment: 'node',
   
   // Look for test files in __tests__ directories with .test.js extension
@@ -36,6 +37,10 @@ module.exports = {
       statements: 85
     },
     // Critical path coverage requirements
+    // Jest resolves these per-file threshold keys against the process working
+    // directory, not against rootDir, so run the coverage command from
+    // src/backend as documented; launched elsewhere, both per-file gates are
+    // dropped and Jest reports "Coverage data for ./handlers/... was not found."
     './handlers/welcomeHandler.js': {
       branches: 100,
       functions: 100,
@@ -65,6 +70,7 @@ module.exports = {
     ]
   ],
   
+  // Enable verbose output for detailed test information
   verbose: true,
   
   // Mock behavior settings

@@ -2,20 +2,9 @@
 # ==============================================================================
 # Node.js Hello World Application - Setup Script
 # 
-# This script automates the initial setup steps for the Node.js Hello World application:
-# it checks the Node.js and npm prerequisites, runs npm install unless -s is given, writes
-# PORT and NODE_ENV into the .env file, creates the logs directory, probes the requested
-# port, and then reports which of those artifacts it can find.
-#
-# Known limitations of the script as written, which keep it from leaving a ready-to-run
-# system on its own:
-#   - check_node_version compares versions the wrong way round, so a Node.js release at or
-#     above MIN_NODE_VERSION is reported as too old and main exits 1 at the prerequisite
-#     stage. The contract comment on that function records the return codes it produces.
-#   - BACKEND_DIR is $PROJECT_ROOT/src, which holds no package.json in this repository, so
-#     npm resolves upward to the project-root manifest and installs there. verify_setup
-#     then looks for $BACKEND_DIR/node_modules, does not find it and returns 1, which -
-#     unguarded under set -e - ends the run before the closing summary is printed.
+# This script automates the initial setup process for the Node.js Hello World application.
+# It checks prerequisites, installs dependencies, configures the environment, and
+# ensures the system is ready to run the application.
 # ==============================================================================
 
 set -e  # Exit immediately if a command exits with a non-zero status
@@ -23,7 +12,8 @@ set -e  # Exit immediately if a command exits with a non-zero status
 # Global variables
 SCRIPT_DIR=$(dirname "$0")
 PROJECT_ROOT=$(realpath "$SCRIPT_DIR/../..")
-BACKEND_DIR=$PROJECT_ROOT/src
+BACKEND_DIR=$PROJECT_ROOT/src/backend
+MANIFEST_DIR=$PROJECT_ROOT  # Directory holding the project's package.json
 MIN_NODE_VERSION="18.0.0"
 DEFAULT_PORT="3000"
 LOG_DIR=$PROJECT_ROOT/logs
@@ -51,13 +41,12 @@ print_usage() {
     echo "    setup.sh - Node.js Hello World Application Setup Script"
     echo
     echo -e "${BLUE}SYNOPSIS${NC}"
-    echo "    bash ./setup.sh [OPTIONS]"
+    echo "    ./setup.sh [OPTIONS]"
     echo
     echo -e "${BLUE}DESCRIPTION${NC}"
-    echo "    This script automates the initial setup steps for the Node.js Hello World application."
-    echo "    It checks the Node.js and npm prerequisites, installs dependencies with npm unless -s"
-    echo "    is given, writes PORT and NODE_ENV into the .env file, creates the logs directory,"
-    echo "    probes the requested port, and then reports which of those artifacts it can find."
+    echo "    This script automates the initial setup process for the Node.js Hello World application."
+    echo "    It checks prerequisites, installs dependencies, configures the environment, and ensures"
+    echo "    the system is ready to run the application."
     echo
     echo -e "${BLUE}OPTIONS${NC}"
     echo "    -p PORT       Specify the port number for the server (default: 3000)"
@@ -67,19 +56,10 @@ print_usage() {
     echo "    -h, --help    Display this help message and exit"
     echo
     echo -e "${BLUE}EXAMPLES${NC}"
-    echo "    bash ./setup.sh"
-    echo "    bash ./setup.sh -p 8080"
-    echo "    bash ./setup.sh -e production"
-    echo "    bash ./setup.sh -s"
-    echo
-    echo -e "${BLUE}KNOWN LIMITATIONS${NC}"
-    echo "    This script does not leave a ready-to-run system on its own:"
-    echo "    - check_node_version compares versions the wrong way round, so a Node.js release at"
-    echo "      or above $MIN_NODE_VERSION is reported as too old and the run exits 1."
-    echo "    - Dependency installation runs in BACKEND_DIR (\$PROJECT_ROOT/src), which must hold"
-    echo "      the project's package.json. This repository keeps its only manifest at the"
-    echo "      project root, so npm installs there and the final verification reports"
-    echo "      dependencies as missing."
+    echo "    ./setup.sh"
+    echo "    ./setup.sh -p 8080"
+    echo "    ./setup.sh -e production"
+    echo "    ./setup.sh -s"
     echo
 }
 
@@ -102,7 +82,8 @@ parse_arguments() {
             e)
                 NODE_ENV=$OPTARG
                 if [[ ! "$NODE_ENV" =~ ^(development|production|test)$ ]]; then
-                    echo -e "${YELLOW}Warning: Unusual environment specified: $NODE_ENV${NC}"
+                    echo -e "${RED}Error: Environment must be one of: development, production, test${NC}" >&2
+                    exit 1
                 fi
                 ;;
             s)
@@ -141,14 +122,9 @@ parse_arguments() {
 
 # ==============================================================================
 # Function: check_node_version
-# Description: Compares the installed Node.js version against MIN_NODE_VERSION. The
-#              comparison below is inverted with respect to that intent: the branch that
-#              reports an adequate version is reached only when the installed version is
-#              lower than MIN_NODE_VERSION.
+# Description: Checks if the installed Node.js version meets the minimum requirement
 # Returns:
-#   1 when Node.js is absent from PATH, and 1 when the installed version is at or above
-#   MIN_NODE_VERSION; 0 only when the installed version is below MIN_NODE_VERSION. main
-#   calls this as `check_node_version || exit 1`, so an up-to-date Node.js ends the run.
+#   0 if Node.js version is adequate, 1 otherwise
 # ==============================================================================
 check_node_version() {
     echo -e "${BLUE}Checking Node.js version...${NC}"
@@ -164,7 +140,7 @@ check_node_version() {
     echo "Current Node.js version: $CURRENT_VERSION"
     
     # Compare versions
-    if [ "$(printf '%s\n' "$MIN_NODE_VERSION" "$CURRENT_VERSION" | sort -V | head -n1)" != "$MIN_NODE_VERSION" ]; then
+    if [ "$(printf '%s\n' "$MIN_NODE_VERSION" "$CURRENT_VERSION" | sort -V | head -n1)" = "$MIN_NODE_VERSION" ]; then
         echo -e "${GREEN}✓ Node.js version is adequate${NC}"
         return 0
     else
@@ -199,18 +175,16 @@ check_npm() {
 
 # ==============================================================================
 # Function: install_dependencies
-# Description: Runs npm install inside BACKEND_DIR. For the install to come from this
-#              project's manifest, BACKEND_DIR must hold its package.json; this repository
-#              keeps its only manifest at PROJECT_ROOT, so npm resolves upward out of
-#              BACKEND_DIR ($PROJECT_ROOT/src) and installs into the project root instead.
+# Description: Installs Node.js dependencies using npm, run from MANIFEST_DIR so that the
+#              install is driven by this project's package.json
 # Returns:
-#   0 if npm install exited successfully, 1 if BACKEND_DIR is unreachable or npm failed
+#   0 if installation was successful, 1 otherwise
 # ==============================================================================
 install_dependencies() {
     echo -e "${BLUE}Installing dependencies...${NC}"
     
-    cd "$BACKEND_DIR" || {
-        echo -e "${RED}Error: Could not change to backend directory: $BACKEND_DIR${NC}"
+    cd "$MANIFEST_DIR" || {
+        echo -e "${RED}Error: Could not change to manifest directory: $MANIFEST_DIR${NC}"
         return 1
     }
     
@@ -220,17 +194,106 @@ install_dependencies() {
         return 0
     else
         echo -e "${RED}Error: Failed to install dependencies${NC}"
-        echo "Try running 'npm install' manually in the $BACKEND_DIR directory"
+        echo "Try running 'npm install' manually in the $MANIFEST_DIR directory"
         return 1
     fi
 }
 
 # ==============================================================================
+# Function: set_env_value
+# Description: Writes KEY=VALUE into ENV_FILE, replacing the first line that starts with
+#              "KEY=" and appending the assignment when no such line exists. The key and
+#              the value reach awk through the environment, so neither is ever read as a
+#              pattern or as a replacement escape: a value containing /, & or \ is written
+#              verbatim, which an in-place `sed "s/KEY=.*/KEY=$VALUE/"` cannot do. The
+#              rewrite is built in a temporary file beside ENV_FILE and moved into place,
+#              and the result is read back before success is reported, so a failed write
+#              can never be mistaken for an applied value.
+# Parameters:
+#   $1 - Environment variable name to set
+#   $2 - Value to assign, written verbatim
+# Usage:
+#   set_env_value "NODE_ENV" "production" || return 1
+# Returns:
+#   0 when ENV_FILE contains exactly the line "KEY=VALUE", 1 on any failure
+# ==============================================================================
+set_env_value() {
+    local key=$1
+    local value=$2
+    local file=$ENV_FILE
+    local tmp_file
+    
+    if ! [[ $key =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        echo -e "${RED}Error: Invalid environment variable name: $key${NC}" >&2
+        return 1
+    fi
+    
+    # A newline in the value would write a second line into the file, which no reader
+    # would attribute to this key
+    if [ "$value" != "${value//$'\n'/}" ]; then
+        echo -e "${RED}Error: Value for $key must not contain a newline${NC}" >&2
+        return 1
+    fi
+    
+    if [ ! -f "$file" ]; then
+        echo -e "${RED}Error: Environment file not found: $file${NC}" >&2
+        return 1
+    fi
+    
+    tmp_file=$(mktemp "$file.XXXXXX") || {
+        echo -e "${RED}Error: Could not create a temporary file beside $file${NC}" >&2
+        return 1
+    }
+    
+    if ! ENV_KEY=$key ENV_VALUE=$value awk '
+        BEGIN {
+            prefix = ENVIRON["ENV_KEY"] "="
+            value = ENVIRON["ENV_VALUE"]
+            replaced = 0
+        }
+        {
+            if (!replaced && substr($0, 1, length(prefix)) == prefix) {
+                print prefix value
+                replaced = 1
+            } else {
+                print
+            }
+        }
+        END {
+            if (!replaced) {
+                print prefix value
+            }
+        }
+    ' "$file" > "$tmp_file"; then
+        rm -f "$tmp_file"
+        echo -e "${RED}Error: Failed to rewrite $file with $key=$value${NC}" >&2
+        return 1
+    fi
+    
+    # Carry over the permissions of the file being replaced; fall back to owner-only
+    # access where chmod does not support --reference
+    if ! chmod --reference="$file" "$tmp_file" 2>/dev/null; then
+        chmod 600 "$tmp_file"
+    fi
+    
+    if ! mv "$tmp_file" "$file"; then
+        rm -f "$tmp_file"
+        echo -e "${RED}Error: Failed to update $file with $key=$value${NC}" >&2
+        return 1
+    fi
+    
+    # Read the result back: the value counts as applied only if the exact line is there
+    if ! grep -Fxq -- "$key=$value" "$file"; then
+        echo -e "${RED}Error: $file does not contain $key=$value after the update${NC}" >&2
+        return 1
+    fi
+    
+    return 0
+}
+
+# ==============================================================================
 # Function: setup_environment
-# Description: Creates or updates the .env file, copying ENV_EXAMPLE_FILE when that
-#              template is present and writing a new file when it is not, then applies the
-#              requested PORT and NODE_ENV and ensures LOG_DIR exists. No template ships
-#              with this repository, so the write-a-new-file path is the one taken here.
+# Description: Sets up environment configuration by creating .env file from template
 # Returns:
 #   0 if setup was successful, 1 otherwise
 # ==============================================================================
@@ -254,18 +317,10 @@ setup_environment() {
     fi
     
     # Update PORT in .env if specified
-    if grep -q "PORT=" "$ENV_FILE"; then
-        sed -i.bak "s/PORT=.*/PORT=$PORT/" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-    else
-        echo "PORT=$PORT" >> "$ENV_FILE"
-    fi
+    set_env_value "PORT" "$PORT" || return 1
     
     # Update NODE_ENV in .env if specified
-    if grep -q "NODE_ENV=" "$ENV_FILE"; then
-        sed -i.bak "s/NODE_ENV=.*/NODE_ENV=$NODE_ENV/" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-    else
-        echo "NODE_ENV=$NODE_ENV" >> "$ENV_FILE"
-    fi
+    set_env_value "NODE_ENV" "$NODE_ENV" || return 1
     
     if [ ! -d "$LOG_DIR" ]; then
         echo "Creating logs directory: $LOG_DIR"
@@ -334,8 +389,13 @@ verify_setup() {
     echo -e "${BLUE}Verifying setup...${NC}"
     local status=0
     
-    if [ -d "$BACKEND_DIR/node_modules" ]; then
+    if [ -d "$MANIFEST_DIR/node_modules" ]; then
         echo -e "${GREEN}✓ Dependencies are installed${NC}"
+    elif [ "$SKIP_DEPS" = true ]; then
+        # The operator declined the install with -s, so missing dependencies are the
+        # requested outcome rather than a setup failure: report and leave status alone
+        echo -e "${YELLOW}! Dependency check skipped because installation was skipped with -s${NC}"
+        echo "Run 'npm install' in $MANIFEST_DIR before starting the server"
     else
         echo -e "${RED}× Dependencies are not installed${NC}"
         status=1
@@ -398,12 +458,11 @@ main() {
     
     setup_environment || exit 1
     
-    # The call below is unguarded, so under set -e a port already in use (return 1) exits
-    # the script here, before verification and before the next-steps summary
-    check_port_availability "$PORT"
+    # Check port availability (non-blocking)
+    check_port_availability "$PORT" || true
     
-    verify_setup
-    local setup_status=$?
+    local setup_status=0
+    verify_setup || setup_status=$?
     
     if [ $setup_status -eq 0 ]; then
         echo
@@ -413,7 +472,7 @@ main() {
         echo
         echo "Next steps:"
         echo "1. Navigate to the backend directory: cd $BACKEND_DIR"
-        echo "2. Start the server: npm start"
+        echo "2. Start the server: PORT=$PORT node index.js"
         echo "3. Access the service at: http://localhost:$PORT/welcome"
         echo
     else

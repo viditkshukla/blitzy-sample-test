@@ -28,10 +28,14 @@ jest.mock('../../errorHandler', () => ({
 }));
 
 // Mock the logger module. The handler records the request and the successful
-// response through info, and reports an unsupported method through error;
-// handle405 performs the rejection itself.
+// response through info, and reports an unsupported method through warn — the
+// level a routine client 4xx belongs at, matching the mapping the access line
+// for the same request already applies; handle405 performs the rejection
+// itself. error is mocked as well, although the handler never calls it, so the
+// non-GET test can assert that no error-level line is emitted.
 jest.mock('../../utils/logger', () => ({
   info: jest.fn(),
+  warn: jest.fn(),
   error: jest.fn()
 }));
 
@@ -121,14 +125,20 @@ describe('handleWelcomeRequest', () => {
     expect(res.end).not.toHaveBeenCalled();
 
     // Verify the request was logged and the unsupported method was reported
-    // through error, the level carried over from the handler this module
-    // replaces. handle405 performs the rejection itself.
+    // through warn: a rejected method is a routine client error, the same
+    // classification the access line for this request gets from its 4xx status
+    // code, so it must not be raised to error level. handle405 performs the
+    // rejection itself. The message is pinned character for character because
+    // it has to name both the rejected method and the endpoint.
     expect(logger.info).toHaveBeenCalledWith(
       `Handling POST request to ${ROUTES.WELCOME} endpoint`
     );
-    expect(logger.error).toHaveBeenCalledWith(
-      `Received unsupported POST method, expected ${HTTP_METHODS.GET}`
+    expect(logger.warn).toHaveBeenCalledWith(
+      `Received unsupported POST method on /welcome, expected ${HTTP_METHODS.GET}`
     );
+
+    // Regression guard: no branch of the handler may log at error level.
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   it('should correctly identify GET method', () => {

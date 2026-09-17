@@ -45,10 +45,26 @@ cd src/backend
 # resolves the root manifest, which declares no dependencies. Install the runtime dependency
 # (dotenv) and the test tooling explicitly; --no-save leaves package.json and
 # package-lock.json untouched, and node_modules is created at the project root, where Node's
-# upward resolution serves both the root and src/backend. jest.config.js configures jest-junit
-# as a reporter, so the runs below need it; pin 17.0.0 — jest-junit 9.0.0 through 16.0.0
-# resolve a uuid affected by GHSA-w5hq-g745-h8pq, while 17.0.0 audits clean.
+# upward resolution serves both the root and src/backend.
+#
+# jest.config.js names jest-junit as a reporter without a version, so the pin below is the
+# authoritative one for this repository: 17.0.0, because jest-junit 9.0.0 through 16.0.0
+# depend on a uuid affected by GHSA-w5hq-g745-h8pq (16.0.0 resolves uuid 8.3.2) while 17.0.0
+# audits clean. Earlier toolchain notes for this service quote 16.0.0 and label it a
+# verification-environment selection rather than a repository requirement; 17.0.0 supersedes
+# it and is verified against this configuration — the endpoint gate under Development exits 0
+# with 5 suites and 40 tests, and coverage/junit/junit.xml records tests="40". `npm audit` run
+# inside this checkout cannot tell the two versions apart: package.json declares nothing, so
+# all four packages are extraneous and the audit reports no vulnerabilities at either version.
 npm install --no-save jest@29.5.0 supertest@6.3.3 dotenv@16.0.3 jest-junit@17.0.0
+
+# The install creates node_modules/ at the project root and is meant to keep it: dotenv is a
+# runtime dependency, so the service does not start without it. A clean checkout is therefore
+# not verified by asserting that node_modules/ is absent — after any documented install it is
+# present by design. Verify instead that installing and running the suites added nothing to
+# the repository: .gitignore keeps node_modules/, coverage/, .env and log files out of version
+# control, so `git status --porcelain` stays empty, and a run that touched nothing leaves the
+# node_modules/ and coverage/ modification times it started with.
 ```
 
 ### Docker Installation
@@ -216,6 +232,29 @@ Content-Security-Policy: default-src 'none'
 </html>
 ```
 
+The three security headers are applied to every response by the security middleware and are
+not configurable. The policy names no `script-src`, `style-src`, `img-src` or `connect-src`
+directive, so each of those falls back to `default-src 'none'`: the page loads no stylesheet,
+script or image, and a script running inside the page cannot read the endpoint either.
+`fetch`, `XMLHttpRequest` and `navigator.sendBeacon` aimed at `/welcome` are refused by the
+document's own policy before any request is dispatched — `fetch` rejects with
+`TypeError: Failed to fetch`, `XMLHttpRequest` reports `status 0` and an empty
+`getAllResponseHeaders()`, `sendBeacon` returns `true` but delivers nothing, and no request
+line appears in the access log. That refusal is the expected behaviour of the policy, not a
+defect, and the policy is deliberately left as it is.
+
+A consequence worth knowing before testing by hand: a browser cannot observe the 405 with a
+scripted request. Use a **navigation** instead — a form POST is permitted, because
+`form-action` does not fall back to `default-src`:
+
+```html
+<form method="POST" action="/welcome"><button>POST /welcome</button></form>
+```
+
+Submitting it returns the 405 documented below, which the browser shows through its plain-text
+viewer because the body is `text/plain`. Outside a browser the equivalent check is
+`curl -i -X POST http://localhost:3000/welcome`.
+
 ### Error Responses
 
 **404 Not Found**
@@ -231,7 +270,11 @@ Not Found
 
 **405 Method Not Allowed**
 
-Returned when using an unsupported HTTP method on an existing endpoint.
+Returned when a registered endpoint is requested with a method it does not allow — that is,
+any method other than `GET` that Node's HTTP parser accepts and dispatches to the application.
+The accepted set is `require('http').METHODS` (35 tokens on Node 22.x), and every one of them
+except `GET` and `CONNECT` produces the response below, `HEAD`, `OPTIONS` and `TRACE`
+included.
 
 ```
 HTTP/1.1 405 Method Not Allowed
@@ -240,6 +283,16 @@ Allow: GET
 
 Method Not Allowed
 ```
+
+Two kinds of request never reach the application, so the runtime answers them instead of this
+contract:
+
+- A method token outside `http.METHODS` — `FROBNICATE`, `FOO`, or even lowercase `get` — is
+  rejected by the HTTP parser with a bare `400 Bad Request` and `Connection: close`: empty
+  body, no `Allow` header, none of the three security headers, and no line in the access log.
+- `CONNECT` is a tunnel request, which Node surfaces separately from ordinary requests. With
+  no tunnel listener installed, the connection is closed without a response (curl reports
+  `Empty reply from server`) and nothing is logged.
 
 ## Implementation Details
 
@@ -276,17 +329,64 @@ cd src/backend
 npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand \
   --testPathPattern "(handlers/welcomeHandler|integration/api|utils/constants|errorHandler|handlers/error)"
 
-# Run every suite. This exits 1: the config, index, router, server and utils/logger suites
-# carry pre-existing failures unrelated to the /welcome endpoint.
+# Run every suite. This exits 1: 10 suites, 5 passing and 5 failing; 86 tests, 68 passing and
+# 18 failing. Every failure is pre-existing and unrelated to the /welcome endpoint — see
+# "Pre-existing test failures" below.
 npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand
 
-# Coverage report. handlers/welcomeHandler.js meets its 100% per-file threshold; the four
-# global thresholds are unmet while the suites above fail, so this also exits 1.
+# Coverage report. Both per-file thresholds are met — handlers/welcomeHandler.js at 100% on
+# all four metrics and handlers/error.js at its 90/100/90/90 — so the only threshold messages
+# are three global ones: statements 78.59% against 85, lines 78.84% against 85 and functions
+# 77.19% against 90. The global branch threshold is met, at 82.2% against 80. Those three are
+# why this exits 1.
 npx jest --config jest.config.js --rootDir . --ci --watchAll=false --runInBand --coverage
 
 # Re-run on change. Interactive, so it does not exit on its own.
 npx jest --config jest.config.js --rootDir . --watch
 ```
+
+### Pre-existing test failures
+
+The 18 failing tests are the same set before and after the `/welcome` rename: none of them
+asserts anything about the endpoint, and each fails inside a shared module, or in a suite,
+whose repair lies outside this service's scope. By cause, as measured:
+
+- **`__tests__/utils/logger.test.js` — 8 failures in two groups, not one.** Four are
+  `TypeError: … is not a function` for methods `utils/logger.js` does not export (`debug`
+  twice, `request`, `response`; the module exports `info`, `warn`, `error`, `logServerStart`,
+  `logServerStop` and `logRequest`). The other four — `info`, `warn` and both `error` tests —
+  fail on their console assertions with `Received number of calls: 0`, because those methods
+  *are* exported but `log()` returns early in the test environment, so nothing reaches the
+  console under Jest; the emitted `[timestamp] INFO: message` format also does not match the
+  `[timestamp] [INFO] message` the suite expects.
+- **`__tests__/server.test.js` — 5 lifecycle failures.** Four assert on `logger.error`,
+  `logger.logServerStart` or `logger.logServerStop` and see zero calls, because `server.js`
+  destructures those functions at require time, so spying on the logger object afterwards
+  cannot intercept the references the module captured. The fifth expects a rejected promise
+  and gets a resolved one, because `startServer`'s `listen` callback ignores its argument. The
+  `http.createServer` spy is unaffected by the mock-reset settings, and the `listen` and
+  `close` assertions in these same tests pass.
+- **`__tests__/index.test.js` — 4 failures.** The suite mocks `createServer` and
+  `setupGracefulShutdown`, which `server.js` does not export, so the mock is `undefined`
+  (`TypeError: Cannot read properties of undefined (reading 'mockReturnValue')`).
+- **`__tests__/router.test.js` — 1 failure.** `route()` has no `try`/`catch`, so parsing an
+  undefined URL throws where the test expects it to be handled.
+- **`__tests__/config.test.js` — 0 failing tests.** The suite cannot load
+  (`Cannot find module '../../config'`, a wrong require depth), so it registers no tests and
+  contributes none of the 18 while still counting as one of the 5 failing suites.
+
+The global coverage shortfall follows from which suites load, not from the rename: `index.js`
+covers 23.07%, `config.js` 81.15% of statements but only 70.45% of branches,
+`middleware/index.js` 84.61% of lines but only 61.53% of branches, and the never-loaded
+`__tests__/setup.js` sits at 0% while still being collected. `router.js`,
+`utils/constants.js`, `errorHandler.js`, `handlers/error.js`, `handlers/welcomeHandler.js` and
+`utils/logger.js` are all at 100%, and `server.js` at 89.55%.
+
+Two `url: '/hello'` fixtures are kept deliberately in `__tests__/handlers/error.test.js` — one
+in the 405 test and one in the 500 test. They describe an arbitrary request URL rather than a
+route, and the retired path makes them more accurate, not less; the 404 test in the same file
+uses `url: '/unknown'`. See [src/backend/README.md](src/backend/README.md) for the per-test
+detail.
 
 ### Linting
 

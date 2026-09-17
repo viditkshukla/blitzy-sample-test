@@ -7,7 +7,6 @@
  */
 
 const request = require('supertest'); // v6.3.3
-const { server } = require('../../index');
 const { startServer, stopServer } = require('../../server');
 const { HTTP_STATUS, MESSAGES, HEADERS, ROUTES } = require('../../utils/constants');
 const { PORT } = require('../../config'); // config.js exports the resolved configuration object
@@ -35,13 +34,31 @@ describe('API Integration Tests', () => {
 
     expect(response.text).toContain(MESSAGES.WELCOME_HEADING);
     expect(response.text).toContain(MESSAGES.WELCOME_DESCRIPTION);
+
+    // Deliberate literal wire-contract anchors — do not "tidy" these into
+    // constants. Every other copy assertion in this repository reads the same
+    // MESSAGES constants the handler renders, so both sides move together and a
+    // changed constant serves new copy with every suite still green. AAP 0.3.4's
+    // "literals stay in the constants module" governs source modules; this is a
+    // verification artifact, and AAP 0.9.3 makes this suite the authoritative
+    // proof of the 0.3.1 contract, so the copy of 0.3.3 is pinned here verbatim.
+    expect(response.text).toContain('Welcome to HelloGHES');
+    expect(response.text).toContain('A simple Node.js service that greets you from the /welcome endpoint.');
   });
 
   test('GET /welcome should be served as HTML with an explicit charset', async () => {
-    await request(baseUrl)
+    const response = await request(baseUrl)
       .get(ROUTES.WELCOME)
       .expect(HTTP_STATUS.OK)
       .expect('Content-Type', HEADERS.CONTENT_TYPE_HTML);
+
+    // Deliberate literal wire-contract anchor — do not replace with the constant.
+    // The chain assertion above is an exact compare, but it reads the same
+    // HEADERS.CONTENT_TYPE_HTML the handler sets, so retyping the response (and
+    // losing the charset this test claims to prove) keeps it green. AAP 0.3.4's
+    // constants rule is a source-module rule; this suite is the authoritative
+    // proof of the AAP 0.3.1 content type, so that value is pinned here verbatim.
+    expect(response.headers['content-type']).toBe('text/html; charset=utf-8');
   });
 
   test('POST /welcome should return 405 Method Not Allowed', async () => {

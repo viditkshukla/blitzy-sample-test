@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-file Jest coverage threshold key moved to `handlers/welcomeHandler.js`
 - Deployment health check, container health check and operator-facing service URLs updated to the new endpoint and expected response body
 - Documentation updated to publish `/welcome` and its HTML sample response
+- Documented non-GET contract for `/welcome` narrowed to the methods Node's HTTP parser accepts (`require('http').METHODS`): every one of them except `GET` and `CONNECT` receives `405` with `Allow: GET`, while a token outside that set is answered by the runtime with a bare `400 Bad Request` and `Connection: close`, and `CONNECT` is closed without a response. Behaviour is unchanged; only the published wording was too broad
+- Documented way to observe the 405 from a browser changed to a navigation-based form POST. The served page's `Content-Security-Policy: default-src 'none'` refuses `fetch`, `XMLHttpRequest` and `navigator.sendBeacon` from the document itself, which is the policy working as intended; the policy and the security middleware are unchanged
+- Published test record corrected to the measured shape: the per-file coverage figures, and the failing-test inventory's causes — the logger group split into four absent-export `TypeError`s and four console assertions that fail because logging is suppressed in the test environment, and the server lifecycle failures attributed to require-time logger destructuring and to the `listen` callback ignoring its argument rather than to the mock-reset settings. The retained `url: '/hello'` fixtures are recorded as sitting in the 405 and 500 tests of `__tests__/handlers/error.test.js`
 
 ### Removed
 - The endpoint handler module of the retired route, superseded by `handlers/welcomeHandler.js`

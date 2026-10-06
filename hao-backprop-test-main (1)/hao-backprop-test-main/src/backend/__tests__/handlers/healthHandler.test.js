@@ -68,14 +68,16 @@ describe('handleHealthRequest', () => {
     // Verify response status code was set to 200 OK
     expect(res.statusCode).toBe(HTTP_STATUS.OK);
 
-    // Verify Content-Type header was set to application/json
+    // Verify Content-Type header was set to application/json, exactly once
     expect(res.setHeader).toHaveBeenCalledWith(
       HEADERS.CONTENT_TYPE,
       HEADERS.CONTENT_TYPE_JSON
     );
+    expect(res.setHeader).toHaveBeenCalledTimes(1);
 
-    // Verify response body is the JSON liveness document
+    // Verify response body is the JSON liveness document, written exactly once
     expect(res.end).toHaveBeenCalledWith(JSON.stringify({ status: MESSAGES.HEALTH_STATUS_UP }));
+    expect(res.end).toHaveBeenCalledTimes(1);
 
     // Verify handle405 was not called
     expect(handle405).not.toHaveBeenCalled();
@@ -97,13 +99,16 @@ describe('handleHealthRequest', () => {
     // Call the handler with mock request and response
     handleHealthRequest(req, res);
 
-    // Verify the status, Content-Type header and body match a bare GET /health
+    // Verify the status, Content-Type header and body match a bare GET /health,
+    // with the header and the body each written exactly once
     expect(res.statusCode).toBe(HTTP_STATUS.OK);
     expect(res.setHeader).toHaveBeenCalledWith(
       HEADERS.CONTENT_TYPE,
       HEADERS.CONTENT_TYPE_JSON
     );
+    expect(res.setHeader).toHaveBeenCalledTimes(1);
     expect(res.end).toHaveBeenCalledWith(JSON.stringify({ status: MESSAGES.HEALTH_STATUS_UP }));
+    expect(res.end).toHaveBeenCalledTimes(1);
   });
 
   // Test cases for non-GET requests
@@ -114,8 +119,10 @@ describe('handleHealthRequest', () => {
     // Call the handler with mock request and response
     handleHealthRequest(req, res);
 
-    // Verify handle405 was called with the response object
+    // Verify handle405 was called once with the very same response object
     expect(handle405).toHaveBeenCalledWith(res);
+    expect(handle405).toHaveBeenCalledTimes(1);
+    expect(handle405.mock.calls[0][0]).toBe(res);
 
     // Verify response status, headers and body were not set directly
     // (because handle405 would handle that)
@@ -146,6 +153,9 @@ describe('handleHealthRequest', () => {
 
     // Verify no response body was written
     expect(res.end).not.toHaveBeenCalled();
+
+    // Verify the error was not converted into a 405 response
+    expect(handle405).not.toHaveBeenCalled();
 
     // Verify the entry message was the first and only info log; the success log was never reached
     expect(logger.info).toHaveBeenNthCalledWith(1, 'Handling GET request to /health endpoint');

@@ -66,6 +66,11 @@ describe('GET /health live pipeline integration', () => {
     expect(response.status).toBe(HTTP_STATUS.OK);
     expect(response.headers['content-type']).toBe(HEADERS.CONTENT_TYPE_JSON);
     expect(response.body).toEqual({ status: MESSAGES.HEALTH_STATUS_UP });
+
+    // Security headers are set as literals by the middleware; constants.js defines none
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.headers['x-frame-options']).toBe('DENY');
+    expect(response.headers['content-security-policy']).toBe("default-src 'none'");
   });
 
   test('should return 405 Method Not Allowed for POST /health', async () => {

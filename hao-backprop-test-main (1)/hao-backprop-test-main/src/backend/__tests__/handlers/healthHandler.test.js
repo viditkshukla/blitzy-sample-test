@@ -124,8 +124,12 @@ describe('handleHealthRequest', () => {
     expect(res.end).not.toHaveBeenCalled();
 
     // Verify logger.info and logger.error were called with appropriate messages
-    expect(logger.info).toHaveBeenCalledWith(`Handling ${method} request to /health endpoint`);
-    expect(logger.error).toHaveBeenCalledWith(
+    expect(logger.info).toHaveBeenNthCalledWith(
+      1,
+      `Handling ${method} request to /health endpoint`
+    );
+    expect(logger.error).toHaveBeenNthCalledWith(
+      1,
       `Received unsupported ${method} method, expected ${HTTP_METHODS.GET}`
     );
   });
@@ -143,7 +147,8 @@ describe('handleHealthRequest', () => {
     // Verify no response body was written
     expect(res.end).not.toHaveBeenCalled();
 
-    // Verify only the entry message was logged; the success log was never reached
+    // Verify the entry message was the first and only info log; the success log was never reached
+    expect(logger.info).toHaveBeenNthCalledWith(1, 'Handling GET request to /health endpoint');
     expect(logger.info).toHaveBeenCalledTimes(1);
   });
 });

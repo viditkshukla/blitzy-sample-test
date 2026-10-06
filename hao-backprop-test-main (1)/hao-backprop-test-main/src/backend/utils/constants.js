@@ -48,6 +48,8 @@ const CONFIG = {
 const MESSAGES = {
   /** Response text for the hello endpoint */
   HELLO_RESPONSE: 'Hello world',
+  /** Status value reported by the /health endpoint while the server is running */
+  HEALTH_STATUS_UP: 'up',
   /** Message for 404 Not Found responses */
   NOT_FOUND: 'Not Found',
   /** Message for 405 Method Not Allowed responses */
@@ -66,6 +68,8 @@ const HEADERS = {
   CONTENT_TYPE: 'Content-Type',
   /** Content-Type value for plain text responses */
   CONTENT_TYPE_TEXT: 'text/plain',
+  /** Content-Type value for JSON responses */
+  CONTENT_TYPE_JSON: 'application/json',
   /** Allow header for Method Not Allowed responses */
   ALLOW: 'Allow'
 };

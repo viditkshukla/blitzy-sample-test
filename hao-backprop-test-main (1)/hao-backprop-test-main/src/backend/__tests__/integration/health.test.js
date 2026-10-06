@@ -11,9 +11,9 @@
 
 const request = require('supertest'); // v6.3.3
 
-// config.js reads process.env once, when it is first loaded, so the port must be set
-// before the server module (and with it config.js) is required. A fixed non-default
-// port avoids clashing with a local server on the default port 3000.
+// config.js reads process.env once, when it is first loaded, so the port must be set before
+// any module that loads config.js is required: the logger required below, then the server
+// module. A fixed non-default port avoids clashing with a local server on the default port 3000.
 const ORIGINAL_PORT = process.env.PORT;
 process.env.PORT = '3101';
 

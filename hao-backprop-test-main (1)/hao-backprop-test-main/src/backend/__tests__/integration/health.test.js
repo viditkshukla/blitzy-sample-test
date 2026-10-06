@@ -4,8 +4,9 @@
  * This test suite makes actual HTTP requests to running server instances started
  * through startServer(), so every request passes through the full middleware
  * pipeline (request logging and security headers) and the exact-match router.
- * It verifies the liveness response, the shared 405, 404 and 500 error formats,
- * and that the existing /hello endpoint keeps its behaviour.
+ * It verifies the liveness response, the shared 405, 404 and 500 error formats, the
+ * security headers on success and error responses, the request log entry for a
+ * query-string request, and that the existing /hello endpoint keeps its behaviour.
  */
 
 const request = require('supertest'); // v6.3.3
@@ -15,6 +16,36 @@ const request = require('supertest'); // v6.3.3
 // port avoids clashing with a local server on the default port 3000.
 const ORIGINAL_PORT = process.env.PORT;
 process.env.PORT = '3101';
+
+// The middleware module destructures logRequest from the logger when it is first loaded,
+// so the observer must replace the logger export before the server module is required.
+// It is a plain call-through function rather than jest.spyOn(): before each test, the
+// resetMocks setting in jest.config.js would erase a spy's call-through implementation,
+// so the spy the middleware captured would stop calling the real logRequest.
+const logger = require('../../utils/logger');
+const originalLogRequest = logger.logRequest;
+const loggedRequests = [];
+
+/**
+ * Records the method, URL, status code and response time the request logger passes to
+ * logRequest, then calls the real logRequest so logging behaves as it does unobserved.
+ *
+ * @param {Object} req - HTTP request object
+ * @param {Object} res - HTTP response object
+ * @param {number} responseTime - Response time in milliseconds
+ * @returns {*} Whatever the real logRequest returns
+ */
+function observeLogRequest(req, res, responseTime) {
+  loggedRequests.push({
+    method: req.method,
+    url: req.url,
+    statusCode: res.statusCode,
+    responseTime
+  });
+  return originalLogRequest.call(this, req, res, responseTime);
+}
+
+logger.logRequest = observeLogRequest;
 
 const serverModule = require('../../server');
 const { HTTP_STATUS, MESSAGES, HEADERS, HTTP_METHODS } = require('../../utils/constants');
@@ -31,8 +62,16 @@ function restorePort() {
   }
 }
 
-// Jest runs afterAll hooks even when assertions fail, so the port is always restored
+/**
+ * Puts the real logRequest back on the logger export, removing the request observer.
+ */
+function restoreLogRequest() {
+  logger.logRequest = originalLogRequest;
+}
+
+// Jest runs afterAll hooks even when assertions fail, so the port and logger are always restored
 afterAll(restorePort);
+afterAll(restoreLogRequest);
 
 describe('GET /health live pipeline integration', () => {
   let server;
@@ -53,6 +92,8 @@ describe('GET /health live pipeline integration', () => {
     expect(response.status).toBe(HTTP_STATUS.OK);
     expect(response.headers['content-type']).toBe(HEADERS.CONTENT_TYPE_JSON);
     expect(response.body).toEqual({ status: MESSAGES.HEALTH_STATUS_UP });
+    // Pin the wire value independently of the constant the handler also reads
+    expect(response.body.status).toBe('up');
 
     // Security headers are set as literals by the middleware; constants.js defines none
     expect(response.headers['x-content-type-options']).toBe('nosniff');
@@ -61,16 +102,30 @@ describe('GET /health live pipeline integration', () => {
   });
 
   test('should return the same liveness response when a query string is present', async () => {
+    // Observe only the request this test sends
+    loggedRequests.length = 0;
+
     const response = await request(server).get('/health?probe=1');
 
     expect(response.status).toBe(HTTP_STATUS.OK);
     expect(response.headers['content-type']).toBe(HEADERS.CONTENT_TYPE_JSON);
     expect(response.body).toEqual({ status: MESSAGES.HEALTH_STATUS_UP });
+    // Pin the wire value independently of the constant the handler also reads
+    expect(response.body.status).toBe('up');
 
     // Security headers are set as literals by the middleware; constants.js defines none
     expect(response.headers['x-content-type-options']).toBe('nosniff');
     expect(response.headers['x-frame-options']).toBe('DENY');
     expect(response.headers['content-security-policy']).toBe("default-src 'none'");
+
+    // The request logger logs the original URL, query string included, with its timing
+    expect(loggedRequests).toHaveLength(1);
+    const [loggedRequest] = loggedRequests;
+    expect(loggedRequest.method).toBe(HTTP_METHODS.GET);
+    expect(loggedRequest.url).toBe('/health?probe=1');
+    expect(loggedRequest.statusCode).toBe(HTTP_STATUS.OK);
+    expect(Number.isFinite(loggedRequest.responseTime)).toBe(true);
+    expect(loggedRequest.responseTime).toBeGreaterThanOrEqual(0);
   });
 
   test('should return 405 Method Not Allowed for POST /health', async () => {
@@ -80,19 +135,31 @@ describe('GET /health live pipeline integration', () => {
     expect(response.headers['content-type']).toBe(HEADERS.CONTENT_TYPE_TEXT);
     expect(response.headers.allow).toBe(HTTP_METHODS.GET);
     expect(response.text).toBe(MESSAGES.METHOD_NOT_ALLOWED);
+
+    // The security middleware runs before routing, so error responses carry the headers too
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.headers['x-frame-options']).toBe('DENY');
+    expect(response.headers['content-security-policy']).toBe("default-src 'none'");
   });
 
   test('should return 404 Not Found for GET /health/ with a trailing slash', async () => {
     const response = await request(server).get('/health/');
 
     expect(response.status).toBe(HTTP_STATUS.NOT_FOUND);
+    expect(response.headers['content-type']).toBe(HEADERS.CONTENT_TYPE_TEXT);
     expect(response.text).toBe(MESSAGES.NOT_FOUND);
+
+    // The security middleware runs before routing, so error responses carry the headers too
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.headers['x-frame-options']).toBe('DENY');
+    expect(response.headers['content-security-policy']).toBe("default-src 'none'");
   });
 
   test('should keep returning 200 OK with \'Hello world\' for GET /hello', async () => {
     const response = await request(server).get('/hello');
 
     expect(response.status).toBe(HTTP_STATUS.OK);
+    expect(response.headers['content-type']).toBe(HEADERS.CONTENT_TYPE_TEXT);
     expect(response.text).toBe(MESSAGES.HELLO_RESPONSE);
   });
 
@@ -100,7 +167,9 @@ describe('GET /health live pipeline integration', () => {
     const response = await request(server).post('/hello');
 
     expect(response.status).toBe(HTTP_STATUS.METHOD_NOT_ALLOWED);
+    expect(response.headers['content-type']).toBe(HEADERS.CONTENT_TYPE_TEXT);
     expect(response.headers.allow).toBe(HTTP_METHODS.GET);
+    expect(response.text).toBe(MESSAGES.METHOD_NOT_ALLOWED);
   });
 });
 
@@ -147,10 +216,16 @@ describe('GET /health when the handler throws before responding', () => {
     expect(failedResponse.headers['content-type']).toBe(HEADERS.CONTENT_TYPE_TEXT);
     expect(failedResponse.text).toBe(MESSAGES.SERVER_ERROR);
 
+    // The security headers set before the handler threw survive into the 500 response
+    expect(failedResponse.headers['x-content-type-options']).toBe('nosniff');
+    expect(failedResponse.headers['x-frame-options']).toBe('DENY');
+    expect(failedResponse.headers['content-security-policy']).toBe("default-src 'none'");
+
     // The same server keeps answering subsequent requests
     const followUpResponse = await request(server).get('/hello');
 
     expect(followUpResponse.status).toBe(HTTP_STATUS.OK);
+    expect(followUpResponse.headers['content-type']).toBe(HEADERS.CONTENT_TYPE_TEXT);
     expect(followUpResponse.text).toBe(MESSAGES.HELLO_RESPONSE);
   });
 });

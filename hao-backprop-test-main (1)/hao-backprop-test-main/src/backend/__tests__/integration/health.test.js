@@ -89,11 +89,17 @@ describe('GET /health live pipeline integration', () => {
   });
 
   /**
-   * Stops the server this block started, through the same module's stopServer().
+   * Stops the server this block started, through the same module's stopServer(). It first
+   * destroys any connection still open, so a request left without a response cannot keep
+   * stopServer() from completing, and the run exits with the failure instead of hanging.
    *
    * @returns {Promise<void>} Resolves when the server has stopped
    */
   afterAll(async () => {
+    // server is undefined when startServer() rejected, leaving no connection to destroy
+    if (server) {
+      server.closeAllConnections();
+    }
     await serverModule.stopServer();
   });
 
@@ -261,6 +267,9 @@ describe('GET /health when the handler throws before responding', () => {
 
   /**
    * Stops the isolated server if its module loaded, then un-mocks the handler and restores PORT.
+   * Before stopping, it destroys any connection still open, so a request left without a
+   * response cannot keep stopServer() from completing, and the run exits with the failure
+   * instead of hanging.
    *
    * @returns {Promise<void>} Resolves when the isolated server has stopped and state is restored
    */
@@ -268,6 +277,10 @@ describe('GET /health when the handler throws before responding', () => {
     // Each server module instance holds its own private server reference, so the
     // live-pipeline block's stopServer() cannot close this server, and vice versa
     if (isolatedServerModule) {
+      // server is undefined when startServer() rejected, leaving no connection to destroy
+      if (server) {
+        server.closeAllConnections();
+      }
       await isolatedServerModule.stopServer();
     }
     jest.dontMock('../../handlers/healthHandler');

@@ -67,6 +67,10 @@ describe('MESSAGES', () => {
     expect(MESSAGES.HELLO_RESPONSE).toBe('Hello world');
   });
 
+  test("should define HEALTH_STATUS_UP as 'up'", () => {
+    expect(MESSAGES.HEALTH_STATUS_UP).toBe('up');
+  });
+
   test("should define NOT_FOUND as 'Not Found'", () => {
     expect(MESSAGES.NOT_FOUND).toBe('Not Found');
   });
@@ -94,6 +98,10 @@ describe('HEADERS', () => {
 
   test("should define CONTENT_TYPE_TEXT as 'text/plain'", () => {
     expect(HEADERS.CONTENT_TYPE_TEXT).toBe('text/plain');
+  });
+
+  test("should define CONTENT_TYPE_JSON as 'application/json'", () => {
+    expect(HEADERS.CONTENT_TYPE_JSON).toBe('application/json');
   });
 
   test("should define ALLOW as 'Allow'", () => {

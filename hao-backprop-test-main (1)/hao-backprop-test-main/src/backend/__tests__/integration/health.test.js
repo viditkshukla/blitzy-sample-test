@@ -73,19 +73,35 @@ function restoreLogRequest() {
 afterAll(restorePort);
 afterAll(restoreLogRequest);
 
+/**
+ * Test suite for the live pipeline, sharing one server on port 3101 from the module at file top.
+ */
 describe('GET /health live pipeline integration', () => {
   let server;
 
-  // Start a real server instance before all tests in this block
+  /**
+   * Starts a real server from the server module required at file top, on port 3101.
+   *
+   * @returns {Promise<void>} Resolves when the server is listening and stored for the tests
+   */
   beforeAll(async () => {
     server = await serverModule.startServer();
   });
 
-  // Stop the server started by this block after all of its tests
+  /**
+   * Stops the server this block started, through the same module's stopServer().
+   *
+   * @returns {Promise<void>} Resolves when the server has stopped
+   */
   afterAll(async () => {
     await serverModule.stopServer();
   });
 
+  /**
+   * Asserts that GET /health answers with the JSON liveness document and the security headers.
+   *
+   * @returns {Promise<void>} Resolves when the response has been checked
+   */
   test('should return 200 OK with the JSON liveness status and security headers', async () => {
     const response = await request(server).get('/health');
 
@@ -101,6 +117,11 @@ describe('GET /health live pipeline integration', () => {
     expect(response.headers['content-security-policy']).toBe("default-src 'none'");
   });
 
+  /**
+   * Asserts that GET /health?probe=1 gets the same liveness response and logs its original URL.
+   *
+   * @returns {Promise<void>} Resolves when the response and its single log entry have been checked
+   */
   test('should return the same liveness response when a query string is present', async () => {
     // Observe only the request this test sends
     loggedRequests.length = 0;
@@ -128,6 +149,11 @@ describe('GET /health live pipeline integration', () => {
     expect(loggedRequest.responseTime).toBeGreaterThanOrEqual(0);
   });
 
+  /**
+   * Asserts that POST /health gets the shared 405 response, security headers included.
+   *
+   * @returns {Promise<void>} Resolves when the response has been checked
+   */
   test('should return 405 Method Not Allowed for POST /health', async () => {
     const response = await request(server).post('/health');
 
@@ -142,6 +168,11 @@ describe('GET /health live pipeline integration', () => {
     expect(response.headers['content-security-policy']).toBe("default-src 'none'");
   });
 
+  /**
+   * Asserts that exact-match routing gives GET /health/ the shared 404, security headers included.
+   *
+   * @returns {Promise<void>} Resolves when the response has been checked
+   */
   test('should return 404 Not Found for GET /health/ with a trailing slash', async () => {
     const response = await request(server).get('/health/');
 
@@ -155,6 +186,11 @@ describe('GET /health live pipeline integration', () => {
     expect(response.headers['content-security-policy']).toBe("default-src 'none'");
   });
 
+  /**
+   * Asserts that GET /hello still answers 200 text/plain 'Hello world' beside the new route.
+   *
+   * @returns {Promise<void>} Resolves when the response has been checked
+   */
   test('should keep returning 200 OK with \'Hello world\' for GET /hello', async () => {
     const response = await request(server).get('/hello');
 
@@ -163,6 +199,11 @@ describe('GET /health live pipeline integration', () => {
     expect(response.text).toBe(MESSAGES.HELLO_RESPONSE);
   });
 
+  /**
+   * Asserts that POST /hello still gets the shared text/plain 405 response with Allow: GET.
+   *
+   * @returns {Promise<void>} Resolves when the response has been checked
+   */
   test('should keep returning 405 Method Not Allowed with Allow: GET for POST /hello', async () => {
     const response = await request(server).post('/hello');
 
@@ -173,10 +214,18 @@ describe('GET /health live pipeline integration', () => {
   });
 });
 
+/**
+ * Test suite for the failure case: an isolated server on port 3102 whose /health handler throws.
+ */
 describe('GET /health when the handler throws before responding', () => {
   let isolatedServerModule;
   let server;
 
+  /**
+   * Starts an isolated server module on port 3102 whose /health handler always throws.
+   *
+   * @returns {Promise<void>} Resolves when the isolated server is listening and stored
+   */
   beforeAll(async () => {
     // The isolated module registry reloads config.js, so this server binds its own port
     process.env.PORT = '3102';
@@ -185,8 +234,21 @@ describe('GET /health when the handler throws before responding', () => {
     // before writing the response. The factory returns a plain function rather than
     // jest.fn(), because the resetMocks setting in jest.config.js would wipe a mock
     // implementation before the test runs.
+    /**
+     * Mocks the health handler, then loads a fresh server module into isolatedServerModule.
+     */
     jest.isolateModules(() => {
+      /**
+       * Builds the stand-in for the health handler module.
+       *
+       * @returns {Object} Module whose handleHealthRequest always throws
+       */
       jest.doMock('../../handlers/healthHandler', () => ({
+        /**
+         * Fails deliberately before any response is written, to drive the shared 500 path.
+         *
+         * @throws {Error} Always, with message 'simulated failure'
+         */
         handleHealthRequest: () => {
           throw new Error('simulated failure');
         }
@@ -197,6 +259,11 @@ describe('GET /health when the handler throws before responding', () => {
     server = await isolatedServerModule.startServer();
   });
 
+  /**
+   * Stops the isolated server if its module loaded, then un-mocks the handler and restores PORT.
+   *
+   * @returns {Promise<void>} Resolves when the isolated server has stopped and state is restored
+   */
   afterAll(async () => {
     // Each server module instance holds its own private server reference, so the
     // live-pipeline block's stopServer() cannot close this server, and vice versa
@@ -207,6 +274,11 @@ describe('GET /health when the handler throws before responding', () => {
     restorePort();
   });
 
+  /**
+   * Asserts that the throw yields the shared 500 and that the same server then answers GET /hello.
+   *
+   * @returns {Promise<void>} Resolves when both responses have been checked
+   */
   test('should return 500 Internal Server Error and keep serving later requests', async () => {
     // A synchronous throw before the response is written reaches the middleware's
     // error path, which answers with the shared 500 format

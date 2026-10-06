@@ -5,10 +5,8 @@
  * and delegates non-GET methods to the shared 405 Method Not Allowed handler.
  */
 
-// Import the handler function to test
 const { handleHealthRequest } = require('../../handlers/healthHandler');
 
-// Import constants for assertions
 const {
   HTTP_STATUS,
   MESSAGES,
@@ -16,37 +14,46 @@ const {
   HTTP_METHODS
 } = require('../../utils/constants');
 
-// Import error handler for mocking
 const { handle405 } = require('../../errorHandler');
 
-// Import logger for mocking
 const logger = require('../../utils/logger');
 
-// Mock the error handler module
+/**
+ * Replaces the error handler module, so 405 delegation is observed without writing a response.
+ *
+ * @returns {Object} Mock errorHandler module whose handle405 is a Jest mock
+ */
 jest.mock('../../errorHandler', () => ({
   handle405: jest.fn()
 }));
 
-// Mock the logger module
+/**
+ * Replaces the logger module, so the handler's log calls can be asserted.
+ *
+ * @returns {Object} Mock logger module exposing info and error as Jest mocks
+ */
 jest.mock('../../utils/logger', () => ({
   info: jest.fn(),
   error: jest.fn()
 }));
 
+/**
+ * Test suite for handleHealthRequest, run with a fresh mock request and response per case.
+ */
 describe('handleHealthRequest', () => {
-  // Define mock objects
   let req;
   let res;
 
-  // Setup before each test
+  /**
+   * Builds a fresh GET /health request and an unwritten response with a null statusCode,
+   * a chainable setHeader mock and an end mock.
+   */
   beforeEach(() => {
-    // Create mock request object
     req = {
-      method: 'GET', // Default to GET method
+      method: 'GET',
       url: '/health'
     };
 
-    // Create mock response object with Jest mock functions
     res = {
       statusCode: null,
       setHeader: jest.fn().mockReturnThis(),
@@ -54,35 +61,34 @@ describe('handleHealthRequest', () => {
     };
   });
 
-  // Cleanup after each test
+  /**
+   * Resets the calls and implementations of every mock after each case.
+   */
   afterEach(() => {
     // Reset all mocks to ensure test isolation
     jest.resetAllMocks();
   });
 
-  // Test case for GET requests
+  /**
+   * Asserts that GET writes a single 200 JSON "up" response without delegating to handle405,
+   * and logs the entry and success messages in that order.
+   */
   it('should return 200 OK with a JSON "up" status for GET requests', () => {
-    // Call the handler with mock request and response
     handleHealthRequest(req, res);
 
-    // Verify response status code was set to 200 OK
     expect(res.statusCode).toBe(HTTP_STATUS.OK);
 
-    // Verify Content-Type header was set to application/json, exactly once
     expect(res.setHeader).toHaveBeenCalledWith(
       HEADERS.CONTENT_TYPE,
       HEADERS.CONTENT_TYPE_JSON
     );
     expect(res.setHeader).toHaveBeenCalledTimes(1);
 
-    // Verify response body is the JSON liveness document, written exactly once
     expect(res.end).toHaveBeenCalledWith(JSON.stringify({ status: MESSAGES.HEALTH_STATUS_UP }));
     expect(res.end).toHaveBeenCalledTimes(1);
 
-    // Verify handle405 was not called
     expect(handle405).not.toHaveBeenCalled();
 
-    // Verify logger.info was called with the entry and success messages
     expect(logger.info).toHaveBeenNthCalledWith(1, 'Handling GET request to /health endpoint');
     expect(logger.info).toHaveBeenNthCalledWith(
       2,
@@ -91,16 +97,16 @@ describe('handleHealthRequest', () => {
     );
   });
 
-  // Test case for GET requests carrying a query string
+  /**
+   * Asserts that a query string leaves the GET liveness response unchanged, because the
+   * handler reads only the request method.
+   */
   it('should return the same response for GET requests with a query string', () => {
     // Add a query string; routing and the handler ignore it
     req.url = '/health?probe=1';
 
-    // Call the handler with mock request and response
     handleHealthRequest(req, res);
 
-    // Verify the status, Content-Type header and body match a bare GET /health,
-    // with the header and the body each written exactly once
     expect(res.statusCode).toBe(HTTP_STATUS.OK);
     expect(res.setHeader).toHaveBeenCalledWith(
       HEADERS.CONTENT_TYPE,
@@ -111,15 +117,17 @@ describe('handleHealthRequest', () => {
     expect(res.end).toHaveBeenCalledTimes(1);
   });
 
-  // Test cases for non-GET requests
+  /**
+   * Asserts that an unsupported method is logged as an error and delegated, with the same
+   * response object, to handle405, which alone writes the 405 response.
+   *
+   * @param {string} method - Unsupported HTTP method under test: POST, PUT, DELETE or HEAD
+   */
   it.each(['POST', 'PUT', 'DELETE', 'HEAD'])('should call handle405 for %s requests', (method) => {
-    // Set request method to the unsupported method
     req.method = method;
 
-    // Call the handler with mock request and response
     handleHealthRequest(req, res);
 
-    // Verify handle405 was called once with the very same response object
     expect(handle405).toHaveBeenCalledWith(res);
     expect(handle405).toHaveBeenCalledTimes(1);
     expect(handle405.mock.calls[0][0]).toBe(res);
@@ -130,7 +138,6 @@ describe('handleHealthRequest', () => {
     expect(res.setHeader).not.toHaveBeenCalled();
     expect(res.end).not.toHaveBeenCalled();
 
-    // Verify logger.info and logger.error were called with appropriate messages
     expect(logger.info).toHaveBeenNthCalledWith(
       1,
       `Handling ${method} request to /health endpoint`
@@ -141,20 +148,29 @@ describe('handleHealthRequest', () => {
     );
   });
 
-  // Test case for an exception raised while writing the response
+  /**
+   * Asserts that an error thrown while writing the response propagates out of the handler,
+   * which neither swallows it nor answers with a 405.
+   */
   it('should propagate an error thrown while writing the response', () => {
-    // Make setting the Content-Type header fail
+    /**
+     * Fails the Content-Type header write, before any response body is sent.
+     *
+     * @throws {Error} Always, with the message 'setHeader failed'
+     */
     res.setHeader.mockImplementation(() => {
       throw new Error('setHeader failed');
     });
 
-    // Verify the handler does not swallow the error
+    /**
+     * Runs the handler so the assertion observes the error it lets escape.
+     *
+     * @throws {Error} The 'setHeader failed' error, propagated from the handler
+     */
     expect(() => handleHealthRequest(req, res)).toThrow('setHeader failed');
 
-    // Verify no response body was written
     expect(res.end).not.toHaveBeenCalled();
 
-    // Verify the error was not converted into a 405 response
     expect(handle405).not.toHaveBeenCalled();
 
     // Verify the entry message was the first and only info log; the success log was never reached

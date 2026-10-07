@@ -32,10 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Future features will be listed here
+- `GET /health` liveness endpoint returning `200 OK` with `Content-Type: application/json` and body `{"status":"up"}`; non-GET methods return `405 Method Not Allowed` with `Allow: GET`
 
 ### Changed
 - Future changes will be listed here
 
 ### Fixed
-- Future fixes will be listed here
+- `server.js` now loads the existing hello handler (`handlers/helloHandler.js`); it previously required the missing `handlers/hello` and failed to start

@@ -1,6 +1,6 @@
 # Node.js Hello World Service
 
-A simple Node.js HTTP server application that exposes a single REST endpoint `/hello` which returns "Hello world" to clients.
+A simple Node.js HTTP server application that exposes two REST endpoints: `/hello`, which returns "Hello world" to clients, and `/health`, which reports that the server is running.
 
 ![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
@@ -15,7 +15,8 @@ The application provides a minimal, functional example of a Node.js web service 
 ## Features
 
 - HTTP server implementation in Node.js
-- Single `/hello` endpoint returning "Hello world" text
+- `/hello` endpoint returning "Hello world" text
+- `/health` liveness endpoint returning `{"status":"up"}`
 - Support for both native HTTP module and Express.js implementations
 - Basic request logging
 - Error handling for various scenarios
@@ -182,6 +183,31 @@ Content-Security-Policy: default-src 'none'
 
 Hello world
 ```
+
+### GET /health
+
+Reports that the server process is running; intended for liveness probes and uptime monitors.
+
+**Request**
+
+```
+GET /health HTTP/1.1
+Host: localhost:3000
+```
+
+**Response**
+
+```
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Content-Security-Policy: default-src 'none'
+
+{"status":"up"}
+```
+
+Non-GET methods return the 405 response described under Error Responses.
 
 ### Error Responses
 

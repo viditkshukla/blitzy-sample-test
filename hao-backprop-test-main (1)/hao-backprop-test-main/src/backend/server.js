@@ -1,9 +1,10 @@
 /**
  * Server Module
  * 
- * Implements a Node.js HTTP server that exposes a single REST endpoint '/hello'
- * which returns 'Hello world' to clients. This module contains the core server
- * implementation, including server creation, request routing, and error handling.
+ * Implements a Node.js HTTP server that exposes the REST endpoints '/hello', which
+ * returns 'Hello world' to clients, and '/health', which reports that the server is
+ * running. This module contains the core server implementation, including server
+ * creation, request routing, and error handling.
  * 
  * @module server
  */
@@ -19,7 +20,8 @@ const { PORT, HOST } = require('./config');
 const { info, error, logServerStart, logServerStop } = require('./utils/logger');
 
 // Import handlers
-const handleHello = require('./handlers/hello');
+const { handleHelloRequest: handleHello } = require('./handlers/helloHandler');
+const { handleHealthRequest } = require('./handlers/healthHandler');
 const { handleNotFound, handleServerError } = require('./handlers/error');
 
 // Import middleware
@@ -35,7 +37,8 @@ let server = null;
  */
 function createRoutes() {
   return {
-    '/hello': handleHello
+    '/hello': handleHello,
+    '/health': handleHealthRequest
   };
 }
 

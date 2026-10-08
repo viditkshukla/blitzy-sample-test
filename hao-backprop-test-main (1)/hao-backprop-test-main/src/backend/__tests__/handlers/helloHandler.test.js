@@ -184,7 +184,7 @@ describe('handleHelloRequest', () => {
     expect(handle405).not.toHaveBeenCalled();
   });
 
-  // Characterisation: every non-GET method value logs and delegates once, writing nothing
+  // Characterisation: every stringifiable non-GET method logs and delegates once, writing nothing
   it.each([
     ['POST', { method: 'POST' }, 'POST'],
     ['PUT', { method: 'PUT' }, 'PUT'],
@@ -239,7 +239,7 @@ describe('handleHelloRequest', () => {
     expect(res.statusCode).toBeNull();
   });
 
-  // Characterisation: an error from res.end propagates and no success log is written
+  // Characterisation: the handler has no try/catch, so an error from res.end propagates uncaught
   it('should propagate an error thrown by res.end without logging success', () => {
     res.end.mockImplementation(() => {
       throw new Error('end failed');
@@ -262,7 +262,7 @@ describe('handleHelloRequest', () => {
     expect(logger.error).toHaveBeenCalledTimes(1);
   });
 
-  // Characterisation: the handler returns undefined even when its collaborators return values
+  // Characterisation: why the guard is a bare return: handle405's value must never leak out
   it('should return undefined even when handle405 or res.end return a value', () => {
     handle405.mockReturnValue('handle405 result');
     res.end.mockReturnValue(res);
@@ -271,7 +271,7 @@ describe('handleHelloRequest', () => {
     expect(handleHelloRequest({ method: 'GET' }, res)).toBeUndefined();
   });
 
-  // Characterisation: the module exports only handleHelloRequest, taking (req, res)
+  // Characterisation: the export surface server.js and router.js bind to, so it must not grow
   it('should export only handleHelloRequest, taking (req, res)', () => {
     const handlerModule = require('../../handlers/helloHandler');
 

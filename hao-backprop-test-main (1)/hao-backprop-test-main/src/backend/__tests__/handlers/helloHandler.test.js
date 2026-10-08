@@ -137,6 +137,12 @@ describe('handleHelloRequest', () => {
   });
 
   // Characterisation: records every collaborator call and status write, in order, with arguments
+  /**
+   * Installs ordered recording on the logger, handle405 and the response double, so one trace
+   * holds every collaborator call and status write with its exact arguments.
+   *
+   * @returns {Array} trace - One entry per recorded call or status write, in the order made
+   */
   function traceCalls() {
     const trace = [];
     logger.info.mockImplementation((...args) => {
@@ -167,7 +173,7 @@ describe('handleHelloRequest', () => {
     return trace;
   }
 
-  // Characterisation: the GET path performs exactly these five effects, in this order
+  // Characterisation: one trace, so a status write moved before the entry log fails this case
   it('should log, set status, header and body, then log success, in that order', () => {
     const trace = traceCalls();
     const result = handleHelloRequest(req, res);
@@ -214,7 +220,7 @@ describe('handleHelloRequest', () => {
     expect(res.statusCode).toBeNull();
   });
 
-  // Characterisation: an absent request throws a TypeError before any side effect
+  // Characterisation: the TypeError comes from the entry-log template's read of req.method
   it.each([undefined, null])('should throw a TypeError before side effects for %p', (absent) => {
     expect(() => handleHelloRequest(absent, res)).toThrow(TypeError);
     expect(() => handleHelloRequest(absent, res)).toThrow("(reading 'method')");
@@ -281,6 +287,13 @@ describe('handleHelloRequest', () => {
   });
 
   // Characterisation: a request whose method getter yields a different value on each read
+  /**
+   * Builds a request whose `method` getter yields the next value of `values` on each read, so
+   * the number of reads is observable from the request itself.
+   *
+   * @param {Array} values - Method values to yield, in read order
+   * @returns {Object} request whose method getter yields one value per read
+   */
   function accessorRequest(values) {
     const request = { reads: 0 };
     Object.defineProperty(request, 'method', {

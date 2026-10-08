@@ -236,6 +236,7 @@ describe('handleHelloRequest', () => {
     expect(handle405).not.toHaveBeenCalled();
     expect(res.setHeader).not.toHaveBeenCalled();
     expect(res.end).not.toHaveBeenCalled();
+    expect(res.statusCode).toBeNull();
   });
 
   // Characterisation: an error from res.end propagates and no success log is written

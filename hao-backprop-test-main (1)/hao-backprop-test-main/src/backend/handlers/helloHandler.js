@@ -6,7 +6,6 @@
  * or error responses for unsupported methods.
  */
 
-// Import required modules and constants
 const { HTTP_STATUS, MESSAGES, HEADERS, HTTP_METHODS } = require('../utils/constants');
 const logger = require('../utils/logger');
 const { handle405 } = require('../errorHandler');
@@ -27,33 +26,22 @@ function isGetMethod(method) {
  * @param {object} res - The HTTP response object
  */
 function handleHelloRequest(req, res) {
-  // Log the incoming request
   logger.info(`Handling ${req.method} request to /hello endpoint`);
   
-  // Extract the HTTP method from the request
   const method = req.method;
   
-  // Check if the method is GET
-  if (isGetMethod(method)) {
-    // Set status code to 200 (OK)
-    res.statusCode = HTTP_STATUS.OK;
-    
-    // Set Content-Type header to text/plain
-    res.setHeader(HEADERS.CONTENT_TYPE, HEADERS.CONTENT_TYPE_TEXT);
-    
-    // Send 'Hello world' message as the response body
-    res.end(MESSAGES.HELLO_RESPONSE);
-    
-    // Log the successful response
-    logger.info(`Successfully responded with ${HTTP_STATUS.OK} OK and "${MESSAGES.HELLO_RESPONSE}" message`);
-  } else {
-    // For non-GET requests, handle Method Not Allowed
+  if (!isGetMethod(method)) {
     logger.error(`Received unsupported ${method} method, expected ${HTTP_METHODS.GET}`);
     handle405(res);
+    return;
   }
+
+  res.statusCode = HTTP_STATUS.OK;
+  res.setHeader(HEADERS.CONTENT_TYPE, HEADERS.CONTENT_TYPE_TEXT);
+  res.end(MESSAGES.HELLO_RESPONSE);
+  logger.info(`Successfully responded with ${HTTP_STATUS.OK} OK and "${MESSAGES.HELLO_RESPONSE}" message`);
 }
 
-// Export the hello endpoint handler function
 module.exports = {
   handleHelloRequest
 };

@@ -6,7 +6,7 @@
 
 ### 1.1.1 Project Overview
 
-The Node.js Hello World Service is an educational tutorial project designed to demonstrate fundamental web service concepts with minimal complexity. This project implements a simple HTTP server application that exposes a single REST endpoint `/hello`, which returns the text "Hello world" to HTTP clients. 
+The Node.js Hello World Service is an educational tutorial project designed to demonstrate fundamental web service concepts with minimal complexity. This project implements a simple HTTP server application that exposes two REST endpoints: `/hello`, which returns the text "Hello world" (`text/plain`) to HTTP clients, and `/health`, a liveness endpoint that returns `200 OK` with `Content-Type: application/json` and the body `{"status":"up"}`.
 
 The project serves as a practical learning tool for developers new to Node.js and RESTful API development, providing a complete implementation that follows modern best practices while maintaining simplicity and readability. Despite its educational focus, the project includes production-ready patterns including containerization with Docker, observability with Prometheus and Grafana, comprehensive testing with Jest, and complete governance documentation.
 
@@ -108,7 +108,7 @@ The Node.js Hello World Service provides a focused set of capabilities that demo
 | Capability | Description | Implementation |
 |---|---|---|
 | HTTP Server | Lightweight Node.js server handling incoming HTTP requests on configurable port | Native `http` module or Express.js framework |
-| REST Endpoint | Single `/hello` endpoint responding with "Hello world" text | GET request returns plain text response with 200 status |
+| REST Endpoints | Two endpoints: `/hello` responds with `text/plain` "Hello world"; `/health` responds with `application/json` `{"status":"up"}` | GET-only; 200 on success, 405 with `Allow: GET` for any other method |
 | Configuration Management | Configurable server settings via environment variables | PORT, HOST, NODE_ENV, LOG_LEVEL with validation and defaults |
 | Error Handling | Comprehensive error management for server lifecycle and request processing | 404, 405, 500 status codes with proper HTTP responses |
 
@@ -116,7 +116,7 @@ The Node.js Hello World Service provides a focused set of capabilities that demo
 |---|---|---|
 | Security Headers | Standard HTTP security headers applied to all responses | X-Content-Type-Options, X-Frame-Options, Content-Security-Policy |
 | Request Logging | Basic logging of incoming requests with timestamps and details | Console-based logger with configurable verbosity levels |
-| Health Checking | Monitoring endpoint for availability verification | `/hello` endpoint serves dual purpose as health check |
+| Health Checking | Dedicated liveness endpoint for availability verification | GET `/health` in `src/backend/handlers/healthHandler.js`; the Docker Compose healthcheck and `infrastructure/scripts/health-check.sh` still probe `/hello` |
 | Containerization | Docker support for consistent development and deployment | Multi-stage Dockerfile with Alpine Linux base image |
 
 | Capability | Description | Implementation |
@@ -139,8 +139,8 @@ sequenceDiagram
     Server->>Middleware: Process Request
     Middleware->>Middleware: Log Request Details
     Middleware->>Middleware: Apply Security Headers
-    Middleware->>Router: Forward Request
-    Router->>Router: Match URL Path
+    Middleware->>Router: Forward Request (routeRequest in server.js)
+    Router->>Router: Exact match routes[pathname]
     Router->>Handler: Route to Hello Handler
     Handler->>Handler: Generate Response
     Handler->>Router: Return "Hello world"
@@ -149,9 +149,11 @@ sequenceDiagram
     Server->>Client: HTTP 200 "Hello world"
 ```
 
+A `GET /health` request follows the same pipeline, is routed to the Health Handler, and receives `HTTP 200` with `Content-Type: application/json` and the body `{"status":"up"}`.
+
 #### Major System Components
 
-The system architecture follows a layered design with clear separation of concerns, organized into distinct functional components:
+The system architecture follows a layered design with clear separation of concerns, organized into distinct functional components. Routing is performed by `createRoutes()` and `routeRequest` inside `server.js`; `router.js` exists but is not imported by `server.js`.
 
 ```mermaid
 graph TD
@@ -160,41 +162,40 @@ graph TD
     end
     
     subgraph "Server Layer"
-        B[server.js]
-        C[router.js]
+        B[server.js<br/>createRoutes / routeRequest]
+        C[router.js<br/>not imported by server.js]
     end
     
     subgraph "Middleware Layer"
-        D[requestLogger.js]
-        E[securityHeaders.js]
-        F[applyMiddleware.js]
+        D[middleware/index.js<br/>requestLogger, securityHeaders,<br/>applyMiddleware]
     end
     
     subgraph "Handler Layer"
-        G[hello.js]
-        H[notFound.js]
-        I[methodNotAllowed.js]
+        G[handlers/helloHandler.js]
+        H[handlers/healthHandler.js]
+        I[handlers/error.js<br/>404 / 500]
     end
     
     subgraph "Support Layer"
         J[config.js]
-        K[errorHandler.js]
+        K[errorHandler.js<br/>handle404 / handle405]
         L[constants.js]
         M[logger.js]
     end
     
     A-->B
-    B-->C
-    B-->F
-    F-->D
-    F-->E
-    C-->G
-    C-->H
-    C-->I
+    B-->D
+    B-->G
+    B-->H
+    B-->I
     B-->J
-    B-->K
-    G-->L
+    D-->I
     D-->M
+    G-->K
+    H-->K
+    G-->L
+    H-->L
+    C-.->G
 ```
 
 **Component Descriptions:**
@@ -202,23 +203,21 @@ graph TD
 | Component | File Location | Responsibility |
 |---|---|---|
 | Application Bootstrap | `index.js` | Entry point that initializes and starts the server |
-| HTTP Server | `server.js` | Manages server lifecycle, socket connections, graceful shutdown |
-| Request Router | `router.js` | Path-based request dispatching and route matching |
+| HTTP Server and Routing | `server.js` | Manages server lifecycle (`startServer()`, `stopServer()`), applies middleware, and routes requests via `createRoutes()`/`routeRequest` using exact path lookup |
+| Standalone Router | `router.js` | `/hello`-only router with trailing-slash normalization; present in the codebase but not imported by `server.js` |
 | Configuration Module | `config.js` | Environment variable loading, validation, and default value management |
 
 | Component | File Location | Responsibility |
 |---|---|---|
-| Hello Handler | `handlers/hello.js` | Processes requests to `/hello` endpoint and generates response |
-| Not Found Handler | `handlers/notFound.js` | Handles requests to non-existent paths with 404 response |
-| Method Not Allowed Handler | `handlers/methodNotAllowed.js` | Handles invalid HTTP methods with 405 response |
-| Error Handler | `errorHandler.js` | Centralized error management and error response formatting |
+| Hello Handler | `handlers/helloHandler.js` | `handleHelloRequest`: GET `/hello` returns 200 `text/plain` "Hello world"; other methods delegate to `handle405(res)` |
+| Health Handler | `handlers/healthHandler.js` | `handleHealthRequest`: GET `/health` returns 200 `application/json` `{"status":"up"}`; other methods delegate to `handle405(res)` |
+| Error Response Handlers | `handlers/error.js` | `handleNotFound` (404) and `handleServerError` (500), both `text/plain` |
+| Error Handler | `errorHandler.js` | `handle404`, `handle405` (405 with `Allow: GET`), `handleRequestError`, and server-level `handleServerError` |
 
 | Component | File Location | Responsibility |
 |---|---|---|
-| Request Logger | `middleware/requestLogger.js` | Logs incoming requests with method, path, and timestamp |
-| Security Headers | `middleware/securityHeaders.js` | Applies standard HTTP security headers to responses |
-| Middleware Composer | `middleware/applyMiddleware.js` | Chains middleware functions in correct order |
-| Constants | `utils/constants.js` | Defines HTTP status codes, headers, and route paths |
+| Middleware | `middleware/index.js` | `requestLogger` (logs method, URL, status, response time), `securityHeaders`, `errorMiddleware`, and `applyMiddleware` (chains middleware ahead of the route handler) |
+| Constants | `utils/constants.js` | Defines HTTP status codes, messages, headers, and route paths |
 | Logger Utility | `utils/logger.js` | Console-based logging with configurable levels |
 
 **Component Interaction Architecture:**
@@ -236,16 +235,17 @@ graph LR
         subgraph "Request Pipeline"
             MW1[Request Logger]
             MW2[Security Headers]
-            Router[Router<br/>router.js]
+            Router[routeRequest<br/>server.js]
         end
         
         subgraph "Handlers"
-            Hello[Hello Handler]
-            NotFound[404 Handler]
-            Method[405 Handler]
+            Hello[Hello Handler<br/>helloHandler.js]
+            Health[Health Handler<br/>healthHandler.js]
+            NotFound[404 Handler<br/>handlers/error.js]
+            Method[405 Handler<br/>errorHandler.handle405]
         end
         
-        Error[Error Handler]
+        Error[500 Handler<br/>handlers/error.js]
     end
     
     Client-->|HTTP Request|Server
@@ -254,9 +254,12 @@ graph LR
     MW1-->MW2
     MW2-->Router
     Router-->|/hello|Hello
+    Router-->|/health|Health
     Router-->|unknown path|NotFound
-    Router-->|invalid method|Method
-    Hello-->|Response|Client
+    Hello-->|non-GET|Method
+    Health-->|non-GET|Method
+    Hello-->|200 text/plain|Client
+    Health-->|200 application/json|Client
     Error-->|Error Response|Client
 ```
 
@@ -287,13 +290,15 @@ flowchart TD
     Start[Incoming HTTP Request] --> Receive[Server Receives Request]
     Receive --> Log[Request Logger Middleware]
     Log --> Security[Security Headers Middleware]
-    Security --> Route{Router: Match Path}
+    Security --> Route{routeRequest:<br/>Exact Path Match}
     
-    Route -->|/hello + GET| HelloHandler[Hello Handler]
-    Route -->|/hello + other method| MethodHandler[405 Handler]
-    Route -->|unknown path| NotFoundHandler[404 Handler]
+    Route -->|/hello + GET| HelloHandler[Hello Handler<br/>200 text/plain]
+    Route -->|/health + GET| HealthHandler[Health Handler<br/>200 application/json]
+    Route -->|/hello or /health + other method| MethodHandler[405 Handler<br/>Allow: GET]
+    Route -->|no exact match| NotFoundHandler[404 Handler]
     
     HelloHandler --> Response[Generate Response]
+    HealthHandler --> Response
     MethodHandler --> Response
     NotFoundHandler --> Response
     
@@ -304,6 +309,8 @@ flowchart TD
     
     Send --> End[Response Sent to Client]
 ```
+
+The method check happens inside each handler: both handlers serve GET and delegate every other method to `errorHandler.handle405(res)`.
 
 **Key Design Decisions:**
 
@@ -357,7 +364,7 @@ The following factors are essential for the project to achieve its educational m
 
 4. **Comprehensive Documentation**
    - Clear README with setup and usage instructions
-   - API documentation for the `/hello` endpoint
+   - API documentation for the `/hello` and `/health` endpoints
    - Architecture explanations and design rationale
    - Contributing guidelines and coding standards
    - Inline code comments for complex logic
@@ -427,7 +434,7 @@ The Node.js Hello World Service delivers a focused set of features that demonstr
 | Request Logging | Log incoming requests with method, path, timestamp, and response status | Console-based logger with configurable LOG_LEVEL |
 | Security Headers | Standard HTTP security headers applied to all responses | X-Content-Type-Options, X-Frame-Options, Content-Security-Policy |
 | Configuration Management | Environment variable-based configuration with validation and defaults | dotenv integration, PORT/HOST/NODE_ENV/LOG_LEVEL variables |
-| Health Checking | Endpoint for monitoring service availability and health | `/hello` endpoint serves dual purpose, returns 200 when operational |
+| Health Checking | Endpoint for monitoring service availability and health | Dedicated GET `/health` liveness endpoint returning 200 `{"status":"up"}`; the Docker Compose healthcheck and `health-check.sh` script probes still use `/hello` |
 
 **Primary User Workflows:**
 
@@ -467,7 +474,7 @@ The project supports the following core workflows for developers learning Node.j
 |---|---|---|
 | Docker | Containerization | Package application with dependencies for consistent deployment | Dockerfile with node:18-alpine base image |
 | Docker Compose | Orchestration | Local development environment with monitoring stack | docker-compose.yml with app, Prometheus, and Grafana services |
-| Prometheus | Monitoring | Metrics collection and time-series storage | Scrapes `/metrics` and `/health` endpoints every 5-30 seconds |
+| Prometheus | Monitoring | Metrics collection and time-series storage | Scrape jobs every 5-30 seconds: `hello-world-app` targets `/metrics`, which the application does not expose; `hello-world-health` scrapes the existing `/health`, whose JSON body is not Prometheus exposition format |
 | Grafana | Visualization | Metrics dashboards and alerting | Pre-configured dashboard with Prometheus datasource |
 
 **Key Technical Requirements:**
@@ -477,10 +484,10 @@ The project supports the following core workflows for developers learning Node.j
 | Runtime Environment | Node.js 18.x LTS or higher, npm 9.x or higher |
 | Port Configuration | Configurable via PORT environment variable (default: 3000) |
 | Host Configuration | Configurable via HOST environment variable (default: 0.0.0.0) |
-| Response Format | Plain text (`Content-Type: text/plain`) for `/hello` endpoint |
+| Response Format | `/hello`: plain text (`Content-Type: text/plain`); `/health`: JSON (`Content-Type: application/json`); all error responses: `text/plain` |
 | HTTP Protocol | HTTP/1.1 over TCP/IP |
-| Response Content | Exact string "Hello world" (case-sensitive) |
-| Supported HTTP Methods | GET for `/hello`, returns 405 for other methods |
+| Response Content | `/hello`: exact string "Hello world" (case-sensitive); `/health`: `{"status":"up"}` |
+| Supported HTTP Methods | GET only for both `/hello` and `/health`; any other method returns 405 with `Allow: GET` |
 | Error Response Codes | 404 (Not Found), 405 (Method Not Allowed), 500 (Internal Server Error) |
 
 #### Implementation Boundaries
@@ -494,7 +501,7 @@ The Node.js Hello World Service operates within clearly defined boundaries to ma
 | Process Architecture | Single server process without clustering or multi-process architecture |
 | Network Interface | Binds to configured HOST (default 0.0.0.0) on configured PORT (default 3000) |
 | Protocol Support | HTTP/1.1 only; no HTTPS, HTTP/2, or WebSocket support |
-| Endpoint Scope | Single endpoint `/hello`; no additional routes or API versioning |
+| Endpoint Scope | Two fixed endpoints, `/hello` and `/health`; no additional routes or API versioning |
 
 **User Groups Covered:**
 
@@ -520,7 +527,7 @@ The project explicitly targets the following user groups:
 | Persistent Data | None—completely stateless service with no data storage |
 | In-Memory Data | Minimal—configuration loaded at startup, no session or cache data |
 | Request Data | No request body parsing or query parameter processing |
-| Response Data | Static text response only ("Hello world") |
+| Response Data | Static responses only: "Hello world" text (`/hello`) and `{"status":"up"}` JSON (`/health`) |
 | Logging Data | Request metadata (method, path, timestamp) logged to console |
 
 **Deployment Scope:**
@@ -560,14 +567,14 @@ To maintain the project's educational focus and manageable complexity, the follo
 
 **Advanced HTTP Functionality:**
 
-- Multiple endpoints beyond `/hello` (no `/users`, `/products`, etc.)
+- Resource or CRUD endpoints beyond `/hello` and `/health` (no `/users`, `/products`, etc.)
 - Request body parsing (JSON, form data, multipart uploads)
 - Query parameter processing
 - URL path parameters or dynamic routes
 - HTTP methods beyond GET (no POST, PUT, DELETE, PATCH)
 - File upload/download capabilities
 - Streaming responses
-- Content negotiation (service returns only plain text)
+- Content negotiation (each endpoint returns one fixed content type)
 - API versioning (no `/v1/`, `/v2/` routes)
 
 **Advanced Error Handling:**
@@ -902,7 +909,7 @@ Implemented in `src/backend/server.js` (lines 1-169), the server uses Node.js `h
 #### 2.2.2.2 Feature Description
 
 **Overview:**
-The Hello World Endpoint implements the core functional requirement of the service: a single REST endpoint at `/hello` that responds to HTTP GET requests with the plain text response "Hello world". This endpoint serves as both the primary educational demonstration and the service health check indicator.
+The Hello World Endpoint implements the core functional requirement of the service: a REST endpoint at `/hello` that responds to HTTP GET requests with the plain text response "Hello world". This endpoint is the primary educational demonstration. It also remains the target of the Docker Compose healthcheck and the `infrastructure/scripts/health-check.sh` probe; the dedicated liveness endpoint `/health` is specified under F-007.
 
 **Business Value:**
 Provides the fundamental example of RESTful endpoint implementation in Node.js, demonstrating proper HTTP response construction, content-type handling, and request method validation. The simplicity enables clear focus on HTTP fundamentals without business logic complexity.
@@ -914,7 +921,7 @@ Provides the fundamental example of RESTful endpoint implementation in Node.js, 
 - Foundation for learning more complex request handling patterns
 
 **Technical Context:**
-Implemented in `src/backend/handlers/helloHandler.js` (lines 1-59), the handler exports a pure function that accepts Node.js request and response objects. The handler validates the HTTP method (only GET allowed), sets appropriate headers (Content-Type: text/plain), and writes the exact response body "Hello world" from the constant `MESSAGES.HELLO_RESPONSE` defined in `src/backend/utils/constants.js`. Method validation delegates to error handlers for non-GET methods.
+Implemented in `src/backend/handlers/helloHandler.js` (lines 1-59), the handler exports `handleHelloRequest`, a pure function that accepts Node.js request and response objects; `server.js` imports it as `handleHello`. The handler validates the HTTP method (only GET allowed), sets appropriate headers (Content-Type: text/plain), and writes the exact response body "Hello world" from the constant `MESSAGES.HELLO_RESPONSE` defined in `src/backend/utils/constants.js`. Non-GET methods are logged at error level and delegated to `errorHandler.handle405(res)`.
 
 #### 2.2.2.3 Functional Requirements
 
@@ -948,8 +955,8 @@ Implemented in `src/backend/handlers/helloHandler.js` (lines 1-59), the handler 
 **F-002-RQ-004:**
 - POST, PUT, DELETE, PATCH, OPTIONS methods return 405 status
 - `Allow: GET` header included in 405 response
-- Method validation in router before handler invocation
-- Error response handled by `methodNotAllowed` handler in `src/backend/handlers/error.js`
+- Method validation happens inside `handleHelloRequest` (via `isGetMethod`) after routing, not in the router
+- 405 response produced by `errorHandler.handle405(res)` in `src/backend/errorHandler.js` (`text/plain` body "Method Not Allowed")
 
 **F-002-RQ-005:**
 - Request logger middleware captures method, URL, timestamp
@@ -993,14 +1000,14 @@ Implemented in `src/backend/handlers/helloHandler.js` (lines 1-59), the handler 
 
 **System Dependencies:**
 - Constants module (`src/backend/utils/constants.js`) for response text
-- Router module (`src/backend/router.js`) for request routing
+- `createRoutes()`/`routeRequest` in `src/backend/server.js` for request routing
 - Middleware chain for security headers and logging
 
 **External Dependencies:**
 - None - endpoint is fully self-contained with no external integrations
 
 **Integration Requirements:**
-- Router must match path `/hello` (normalized, trailing slash handled)
+- `routeRequest` must match path `/hello` exactly (direct `routes[pathname]` lookup; no trailing-slash normalization)
 - Middleware chain must apply security headers before handler execution
 - Logger must capture request timing for observability
 
@@ -1048,13 +1055,13 @@ Implemented across two modules: `src/backend/handlers/error.js` contains specifi
 **Acceptance Criteria:**
 
 **F-003-RQ-001:**
-- Requests to undefined paths (not `/hello`) return 404 status
+- Requests to undefined paths (neither `/hello` nor `/health` exactly) return 404 status
 - Response body: "Not Found" from `MESSAGES.NOT_FOUND` constant
 - Content-Type: text/plain header set
 - Logged at WARN level with request details
 
 **F-003-RQ-002:**
-- Non-GET requests to `/hello` return 405 status
+- Non-GET requests to `/hello` or `/health` return 405 status
 - Response includes `Allow: GET` header listing supported methods
 - Response body: "Method Not Allowed" from `MESSAGES.METHOD_NOT_ALLOWED`
 - Logged at WARN level with method and path
@@ -1510,15 +1517,15 @@ Implemented in `src/backend/config.js` (lines 1-93) as a module that loads `.env
 | Category | Observability |
 | Priority | Medium |
 | Status | Completed |
-| Implementation Location | `infrastructure/local/docker-compose.yml`, `infrastructure/scripts/health-check.sh` |
+| Implementation Location | `src/backend/handlers/healthHandler.js` (`handleHealthRequest`), the `'/health'` route in `src/backend/server.js` `createRoutes()`, `src/backend/utils/constants.js` (`MESSAGES.HEALTH_STATUS_UP = 'up'`, `HEADERS.CONTENT_TYPE_JSON = 'application/json'`), `infrastructure/local/docker-compose.yml`, `infrastructure/scripts/health-check.sh` |
 
 #### 2.2.7.2 Feature Description
 
 **Overview:**
-Service Health Checking leverages the `/hello` endpoint as a dual-purpose health check, enabling automated monitoring of service availability by Docker, orchestration platforms, and monitoring systems. The implementation demonstrates pragmatic health checking patterns without requiring dedicated health endpoints.
+Service Health Checking provides a dedicated `GET /health` liveness endpoint that reports the server process is running, alongside the container and script probes that target `/hello`. The endpoint returns `200 OK` with `Content-Type: application/json` and the body `{"status":"up"}`, enabling automated availability checks by liveness probes, uptime monitors, and orchestration platforms.
 
 **Business Value:**
-Enables automated service health monitoring, container orchestration, and deployment verification without additional implementation complexity. Demonstrates practical health checking patterns suitable for simple services.
+Enables automated service health monitoring, container orchestration, and deployment verification with a dedicated, minimal liveness signal. Demonstrates practical health checking patterns suitable for simple services.
 
 **User Benefits:**
 - Understanding of health check concepts and implementation
@@ -1527,7 +1534,7 @@ Enables automated service health monitoring, container orchestration, and deploy
 - Foundation for more sophisticated health checks
 
 **Technical Context:**
-Docker Compose configuration at `infrastructure/local/docker-compose.yml` (lines 25-30) defines healthcheck targeting the `/hello` endpoint using curl. Health check script at `infrastructure/scripts/health-check.sh` provides standalone verification with status code checking (200 required) and response body validation ("Hello world" text must be present). Prometheus monitoring configuration also scrapes the `/hello` endpoint as a health indicator.
+`handleHealthRequest(req, res)` in `src/backend/handlers/healthHandler.js` is registered under the literal key `'/health'` in `createRoutes()` in `src/backend/server.js`. For GET it sets `statusCode` 200, `Content-Type` from `HEADERS.CONTENT_TYPE_JSON`, and ends with `JSON.stringify({ status: MESSAGES.HEALTH_STATUS_UP })`; every other method is logged at error level and delegated to `errorHandler.handle405(res)`. Docker Compose configuration at `infrastructure/local/docker-compose.yml` (lines 25-30) defines a healthcheck targeting the `/hello` endpoint using curl. Health check script at `infrastructure/scripts/health-check.sh` provides standalone verification of `/hello` with status code checking (200 required) and response body validation ("Hello world" text must be present). The Prometheus `hello-world-health` job scrapes `/health`, but cannot ingest its JSON body (see F-010).
 
 #### 2.2.7.3 Functional Requirements
 
@@ -1537,6 +1544,11 @@ Docker Compose configuration at `infrastructure/local/docker-compose.yml` (lines
 | F-007-RQ-002 | Healthcheck timing: interval 30s, timeout 10s, retries 3, start_period 10s | Should-Have | Low |
 | F-007-RQ-003 | Health script must verify 200 status and body contains "Hello world" | Should-Have | Low |
 | F-007-RQ-004 | Health check script must provide clear exit codes for CI pipelines | Should-Have | Low |
+| F-007-RQ-005 | GET `/health` must return 200 with `Content-Type: application/json` and body `{"status":"up"}` | Must-Have | Low |
+| F-007-RQ-006 | Non-GET methods on `/health` must be logged at error level and answered with 405 via `errorHandler.handle405(res)` | Must-Have | Low |
+| F-007-RQ-007 | The `/health` route must match the path exactly | Must-Have | Low |
+| F-007-RQ-008 | `/health` responses must carry the middleware security headers | Must-Have | Low |
+| F-007-RQ-009 | `/health` must be a pure liveness check with no dependency, uptime, or version data | Should-Have | Low |
 
 **Acceptance Criteria:**
 
@@ -1565,18 +1577,45 @@ Docker Compose configuration at `infrastructure/local/docker-compose.yml` (lines
 - Exit code 2: Service unreachable (connection failed)
 - Script outputs descriptive error messages for debugging
 
+**F-007-RQ-005:**
+- `res.statusCode` set to `HTTP_STATUS.OK` (200)
+- `Content-Type` header set once, to `HEADERS.CONTENT_TYPE_JSON` (`application/json`)
+- Body written once: `JSON.stringify({ status: MESSAGES.HEALTH_STATUS_UP })`, i.e. `{"status":"up"}`
+- Entry ("Handling GET request to /health endpoint") and success messages logged at info level
+
+**F-007-RQ-006:**
+- POST, PUT, DELETE and HEAD requests logged via `logger.error` ("Received unsupported {method} method, expected GET")
+- Handler delegates to `errorHandler.handle405(res)` and writes nothing itself
+- Response: 405, `Content-Type: text/plain`, `Allow: GET`, body "Method Not Allowed"
+
+**F-007-RQ-007:**
+- Query strings are ignored: `GET /health?probe=1` returns the same 200 JSON response
+- `GET /health/` (trailing slash) returns 404 "Not Found", because `routeRequest` performs a direct `routes[pathname]` lookup
+
+**F-007-RQ-008:**
+- `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Content-Security-Policy: default-src 'none'` present on 200, 405, and 404 responses for `/health` paths
+- Headers applied by `securityHeaders` in `src/backend/middleware/index.js` before routing
+
+**F-007-RQ-009:**
+- Response body contains only the `status` field
+- No dependency checks, uptime, version, host, or other runtime data
+- Body is static and does not incorporate request input
+
 #### 2.2.7.4 Technical Specifications
 
 **Input Parameters:**
+- In-app liveness endpoint: HTTP GET request to `/health`; no request body, query parameters ignored, no authentication
 - Docker healthcheck: Target URL `http://localhost:3000/hello`
-- Standalone script: Configurable URL (default localhost:3000)
+- Standalone script: Configurable URL (default localhost:3000, endpoint `/hello`)
 - Timeout and interval values in Docker Compose
 
 **Output/Response:**
+- `GET /health`: `200 OK`, `Content-Type: application/json`, security headers, body `{"status":"up"}`
+- Non-GET `/health`: `405 Method Not Allowed`, `Content-Type: text/plain`, `Allow: GET`
 - Docker healthcheck: Exit code 0 (healthy) or 1 (unhealthy)
 - Container status: "healthy", "unhealthy", or "starting"
 - Health check script: Console output with success/failure message
-- Prometheus: up{} metric indicates service reachability
+- Prometheus: `up{job="hello-world-health"}` stays 0, because the JSON body is not Prometheus exposition format
 
 **Performance Criteria:**
 - Health check response time: < 100ms under normal conditions
@@ -1587,25 +1626,30 @@ Docker Compose configuration at `infrastructure/local/docker-compose.yml` (lines
 - Access to service endpoint (network connectivity)
 - HTTP client (curl) available in container
 - No authentication or special headers required
+- Response value sourced from `MESSAGES.HEALTH_STATUS_UP`; no persistence or I/O
 
 #### 2.2.7.5 Dependencies
 
 **Prerequisite Features:**
-- F-002 (Hello World Endpoint) - Provides endpoint for health checking
-- F-001 (HTTP Server Implementation) - Must be running to respond
+- F-001 (HTTP Server Implementation) - Must be running to respond; routes `/health` via `createRoutes()`/`routeRequest` in `server.js`
+- F-002 (Hello World Endpoint) - Target of the Docker Compose healthcheck and `health-check.sh` probes
+- F-003 (Error Handling) - `errorHandler.handle405(res)` answers non-GET requests
+- F-005 (Security Headers) - Middleware applies security headers to `/health` responses
 
 **System Dependencies:**
+- Constants module (`src/backend/utils/constants.js`): `HTTP_STATUS`, `MESSAGES.HEALTH_STATUS_UP`, `HEADERS.CONTENT_TYPE_JSON`, `HTTP_METHODS`
+- Logger utility (`src/backend/utils/logger.js`)
 - curl command-line tool in Docker container
 - Docker or Docker Compose for container health checks
 - Network connectivity to service port
 
 **External Dependencies:**
-- None - health checks use existing endpoint
+- None - the liveness endpoint and probes are self-contained
 
 **Integration Requirements:**
-- F-009 (Docker Compose) deploys healthcheck configuration
-- F-010 (Prometheus) scrapes endpoint for availability metrics
-- Container orchestrators can use health status for deployment decisions
+- F-009 (Docker Compose) deploys the healthcheck configuration, which probes `/hello`
+- F-010 (Prometheus) `hello-world-health` job targets `/health` but records `up=0` because the JSON body is not exposition format
+- Container orchestrators can use `/health` as a liveness path for deployment decisions
 
 ### 2.2.8 F-008: Graceful Shutdown
 
@@ -1891,7 +1935,7 @@ Provides operational visibility essential for understanding service behavior, de
 - Foundation for building custom monitoring solutions
 
 **Technical Context:**
-Prometheus configuration at `infrastructure/monitoring/prometheus.yml` defines scrape jobs targeting `/metrics` endpoint (5s interval) and `/health` endpoint (30s interval). Grafana dashboard at `infrastructure/monitoring/grafana-dashboard.json` provides 13 pre-configured panels visualizing uptime, request rates, duration percentiles, status codes, error rates, and Node.js metrics (memory, CPU, event loop). **Note:** Metrics endpoint implementation (`/metrics`) not found in application source code; configuration exists but endpoint may not be fully implemented.
+Prometheus configuration at `infrastructure/monitoring/prometheus.yml` defines scrape jobs targeting `/metrics` endpoint (5s interval) and `/health` endpoint (30s interval). Grafana dashboard at `infrastructure/monitoring/grafana-dashboard.json` provides 13 pre-configured panels visualizing uptime, request rates, duration percentiles, status codes, error rates, and Node.js metrics (memory, CPU, event loop). **Note:** Metrics endpoint implementation (`/metrics`) not found in application source code; configuration exists but endpoint may not be fully implemented. The `/health` endpoint exists but returns JSON (`{"status":"up"}`), not Prometheus exposition format.
 
 #### 2.2.10.3 Functional Requirements
 
@@ -1917,7 +1961,7 @@ Prometheus configuration at `infrastructure/monitoring/prometheus.yml` defines s
 - Target: `hello-world-app:3000/health`
 - Scrape interval: 30s
 - Monitors service availability via up{} metric
-- **Status:** Functional using existing /hello endpoint
+- **Status:** Not functional. The `/health` target exists and answers `200 OK` with `application/json` `{"status":"up"}`, but the JSON body is not Prometheus exposition format, so the scrape fails and `up{job="hello-world-health"}` stays 0
 
 **F-010-RQ-003:**
 - Grafana dashboard UID: hello-world-dashboard
@@ -1984,7 +2028,7 @@ Prometheus configuration at `infrastructure/monitoring/prometheus.yml` defines s
 
 **Prerequisite Features:**
 - F-002 (Hello Endpoint) - Used as health check target
-- F-007 (Health Checking) - Provides /health endpoint
+- F-007 (Health Checking) - Provides the `/health` endpoint the `hello-world-health` job targets; its JSON body is not exposition format, so that job records `up=0`
 - F-009 (Docker Compose) - Orchestrates monitoring stack
 - **F-010-RQ-004 (Metrics Endpoint)** - Required but implementation status unclear
 
@@ -2006,7 +2050,7 @@ Prometheus configuration at `infrastructure/monitoring/prometheus.yml` defines s
 - Grafana dashboard provisioned via volume mount
 
 **Implementation Note:**
-The monitoring feature is **partially implemented**. Prometheus and Grafana configurations exist and reference a `/metrics` endpoint, but the implementation of this endpoint was not found in the application source code during repository analysis. The health monitoring aspect (F-010-RQ-002) is functional using the existing `/hello` endpoint. Full implementation would require adding metrics instrumentation (likely using `prom-client` library) and exposing the `/metrics` endpoint.
+The monitoring feature is **partially implemented**. Prometheus and Grafana configurations exist and reference a `/metrics` endpoint, but the implementation of this endpoint was not found in the application source code during repository analysis. The health monitoring job (F-010-RQ-002) targets the implemented `/health` endpoint, but Prometheus cannot parse its JSON response, so `up{job="hello-world-health"}` stays 0 until the job becomes a blackbox-style HTTP probe or the endpoint emits exposition format. Full implementation would require adding metrics instrumentation (likely using `prom-client` library) and exposing the `/metrics` endpoint.
 
 ### 2.2.11 F-011: Testing Infrastructure
 
@@ -2194,6 +2238,7 @@ graph TD
     F009[F-009: Containerization]
     F010[F-010: Monitoring]
     F011[F-011: Testing]
+    CONST[Shared Constants<br/>utils/constants.js]
     
     F006 -->|Provides config| F001
     F006 -->|Provides LOG_LEVEL| F004
@@ -2204,7 +2249,11 @@ graph TD
     F003 -->|Handles errors| F002
     F004 -->|Logs activity| F002
     F004 -->|Logs errors| F003
-    F002 -->|Serves as endpoint| F007
+    F001 -->|Routes /health| F007
+    F003 -->|handle405| F007
+    F005 -->|Secures /health| F007
+    CONST -->|HEALTH_STATUS_UP,<br/>CONTENT_TYPE_JSON| F007
+    F002 -->|Probe target /hello| F007
     F001 -->|Lifecycle mgmt| F008
     F004 -->|Logs shutdown| F008
     F001 -->|Packaged| F009
@@ -2218,8 +2267,11 @@ graph TD
     F004 -.->|Tests| F011
     F005 -.->|Tests| F011
     F006 -.->|Tests| F011
+    F007 -.->|Tests| F011
     F008 -.->|Tests| F011
 ```
+
+F-007 is served in-process by the `/health` handler (`src/backend/handlers/healthHandler.js`), which relies on F-001 routing (`createRoutes()`/`routeRequest` in `server.js`), F-003 `errorHandler.handle405(res)`, F-005 security headers, and the shared constants. The Docker Compose healthcheck and `health-check.sh` probes of F-007 still target the F-002 `/hello` endpoint.
 
 ### 2.3.2 Integration Points
 
@@ -2233,11 +2285,12 @@ sequenceDiagram
     participant Server as F-001: HTTP Server
     participant Logger as F-004: Request Logger
     participant Security as F-005: Security Headers
-    participant Router as Router
+    participant Router as Router (routeRequest)
     participant Handler as F-002: Hello Handler
+    participant Health as F-007: Health Handler
     participant ErrorHandler as F-003: Error Handler
     
-    Client->>Server: HTTP GET /hello
+    Client->>Server: HTTP GET /hello or /health
     Server->>Logger: Capture start time
     Logger->>Security: Add security headers
     Security->>Router: Route request
@@ -2246,6 +2299,10 @@ sequenceDiagram
         Router->>Handler: Process hello request
         Handler->>Handler: Generate "Hello world"
         Handler-->>Router: Response ready
+    else Path is /health
+        Router->>Health: Process health request
+        Health->>Health: Generate {"status":"up"} (application/json)
+        Health-->>Router: Response ready
     else Path not found
         Router->>ErrorHandler: 404 Not Found
         ErrorHandler-->>Router: Error response
@@ -2285,14 +2342,14 @@ Configuration Management (F-006) provides settings consumed by multiple features
 Error Handling (F-003) integrates with request processing to provide consistent error responses:
 
 **Integration Points:**
-1. **404 Not Found:** Router invokes `notFound` handler when no route matches
-2. **405 Method Not Allowed:** Router invokes `methodNotAllowed` handler for unsupported methods
-3. **500 Internal Server Error:** Server-level error handler catches uncaught exceptions
+1. **404 Not Found:** `routeRequest` in `server.js` invokes `handleNotFound` (`src/backend/handlers/error.js`) when no route matches exactly
+2. **405 Method Not Allowed:** The `/hello` and `/health` handlers call `errorHandler.handle405(res)` for any non-GET method
+3. **500 Internal Server Error:** Middleware and server-level error paths call `handleServerError` (`src/backend/handlers/error.js`) for uncaught exceptions
 4. **Logging:** All error handlers delegate to F-004 for logging error details
 
 **Integration Mechanism:**
-- Router checks path in `src/backend/router.js` and calls appropriate error handler
-- Error handlers in `src/backend/handlers/error.js` format responses consistently
+- `routeRequest` looks up `routes[pathname]` and falls back to the 404 handler
+- Error handlers in `src/backend/handlers/error.js` and `src/backend/errorHandler.js` format responses consistently
 - Security headers (F-005) applied to error responses via middleware
 - Logger (F-004) captures error responses with appropriate severity
 
@@ -2323,6 +2380,9 @@ Testing Infrastructure (F-011) validates all features through unit and integrati
 | F-001 (Server) | `__tests__/server.test.js` | Unit | ≥ 85% |
 | F-002 (Hello) | `__tests__/handlers/helloHandler.test.js` | Unit | 100% |
 | F-002 (Hello) | `__tests__/integration/api.test.js` | Integration | Full E2E |
+| F-007 (Health) | `__tests__/handlers/healthHandler.test.js` | Unit | 100% |
+| F-007 (Health) | `__tests__/integration/health.test.js` | Integration (live pipeline) | Full E2E |
+| F-007 (Health) | `__tests__/utils/constants.test.js` | Unit | `HEALTH_STATUS_UP`, `CONTENT_TYPE_JSON` |
 | F-003 (Errors) | `__tests__/handlers/error.test.js` | Unit | ≥ 90% |
 | F-006 (Config) | `__tests__/config.test.js` | Unit | ≥ 85% |
 
@@ -2346,12 +2406,14 @@ Testing Infrastructure (F-011) validates all features through unit and integrati
 - F-003 (Error Handling) - Error messages (NOT_FOUND, METHOD_NOT_ALLOWED, SERVER_ERROR)
 - F-004 (Logging) - Log level constants
 - F-006 (Configuration) - Default configuration values
+- F-007 (Health) - Status value (`MESSAGES.HEALTH_STATUS_UP`) and content type (`HEADERS.CONTENT_TYPE_JSON`)
 
 **Integration Pattern:**
 ```javascript
 // Constants defined once
 const MESSAGES = {
   HELLO_RESPONSE: 'Hello world',
+  HEALTH_STATUS_UP: 'up',
   NOT_FOUND: 'Not Found',
   // ...
 };
@@ -2371,6 +2433,7 @@ const { MESSAGES } = require('./utils/constants');
 - F-002 (Hello) - Request/response logging via middleware
 - F-003 (Error Handling) - Error logging with appropriate severity
 - F-004 (Request Logging) - Primary consumer for all request logs
+- F-007 (Health) - Entry/success info logs and unsupported-method error logs
 - F-008 (Graceful Shutdown) - Shutdown event logging
 
 **Integration Pattern:**
@@ -2391,6 +2454,7 @@ logger.error('Uncaught exception:', error);
 - F-003 (Error Handlers) - Receives req/res for error responses
 - F-004 (Request Logging) - Inspects req/res for logging
 - F-005 (Security Headers) - Modifies res headers
+- F-007 (Health Handler) - Receives req/res for the liveness response
 
 **Integration Pattern:**
 - Request object provides: `method`, `url`, `headers`
@@ -2410,19 +2474,23 @@ flowchart TB
     F005 --> Route{Router<br/>Match Path}
     
     Route -->|/hello + GET| F002[F-002: Hello Handler<br/>Generate Response]
-    Route -->|/hello + other| F003A[F-003: Error 405<br/>Method Not Allowed]
+    Route -->|/health + GET| F007H[F-007: Health Handler<br/>200 application/json]
+    Route -->|/hello or /health + other| F003A[F-003: Error 405<br/>Method Not Allowed]
     Route -->|unknown path| F003B[F-003: Error 404<br/>Not Found]
     
     F002 --> Log
+    F007H --> Log
     F003A --> Log
     F003B --> Log
     
     Log[F-004: Logger<br/>Log Response] --> F001B[F-001: Server<br/>Send Response]
     F001B --> End([HTTP Response])
     
-    F007[F-007: Health Check<br/>Docker/Prometheus] -.->|Monitors| F002
+    F007[F-007: Health Probes<br/>Docker/script] -.->|Probe /hello| F002
     F010[F-010: Monitoring<br/>Prometheus/Grafana] -.->|Observes| F004
+    F010 -.->|Scrapes /health, up=0| F007H
     F011[F-011: Tests<br/>Jest/Supertest] -.->|Validates| F002
+    F011 -.->|Validates| F007H
     F011 -.->|Validates| F003A
     F011 -.->|Validates| F003B
     
@@ -2463,14 +2531,14 @@ flowchart TB
 
 | Area | Constraint | Justification |
 |---|---|---|
-| Endpoints | Single `/hello` endpoint only | Educational focus on fundamentals; additional endpoints out of scope |
+| Endpoints | Two fixed endpoints only: `/hello` and `/health` | Educational focus on fundamentals; additional endpoints out of scope |
 | HTTP Methods | GET only (405 for others) | Simplicity; no POST/PUT/DELETE operations needed |
 | Request Data | No body parsing or query parameters | Stateless service with no input processing |
-| Response Format | Plain text only | No JSON, XML, HTML rendering; single content type |
+| Response Format | `text/plain` for `/hello` and all error responses; `application/json` for `/health` only | No XML or HTML rendering; one fixed content type per response |
 | Authentication | None | Public endpoint; security headers only |
 | Rate Limiting | None | Unlimited request rate; implement externally if needed |
 
-**Evidence:** Handler implementation accepts no request data, router only matches `/hello` path, method validation rejects non-GET requests.
+**Evidence:** Handler implementations accept no request data, `createRoutes()` in `server.js` maps only `/hello` and `/health`, method validation in each handler rejects non-GET requests.
 
 #### 2.4.1.4 Data Storage Constraints
 
@@ -2820,12 +2888,12 @@ flowchart TB
 | F-004 | Request Logging | 6 | F-004-RQ-001, F-004-RQ-002 | Completed |
 | F-005 | HTTP Security Headers | 4 | F-005-RQ-001, F-005-RQ-002, F-005-RQ-003 | Completed |
 | F-006 | Configuration Management | 7 | F-006-RQ-001, F-006-RQ-002, F-006-RQ-006 | Completed |
-| F-007 | Health Checking | 4 | F-007-RQ-001 | Completed |
+| F-007 | Health Checking | 9 (F-007-RQ-001 to RQ-004: Docker/script probes of `/hello`; F-007-RQ-005 to RQ-009: `GET /health` liveness endpoint) | F-007-RQ-001, F-007-RQ-005, F-007-RQ-006 | Completed |
 | F-008 | Graceful Shutdown | 5 | F-008-RQ-001, F-008-RQ-002 | Completed |
 | F-009 | Docker Containerization | 7 | F-009-RQ-001, F-009-RQ-003, F-009-RQ-005 | Completed |
 | F-010 | Monitoring and Observability | 5 | F-010-RQ-004 | Partially Completed |
 | F-011 | Testing Infrastructure | 6 | F-011-RQ-001, F-011-RQ-002, F-011-RQ-004 | Completed |
-| **Total** | **11 Features** | **59 Requirements** | **23 Critical** | **10.9 / 11 Complete** |
+| **Total** | **11 Features** | **64 Requirements** | **27 Critical** | **10.9 / 11 Complete** |
 
 ### 2.5.2 Requirement to Test Mapping
 
@@ -2836,11 +2904,12 @@ flowchart TB
 | F-001 (Server Lifecycle) | `__tests__/server.test.js` | `__tests__/integration/api.test.js` | 85%+ | 85%+ |
 | F-004 (Request Logging) | Mock validation in handler tests | Verified in integration tests | 85%+ | 85%+ |
 | F-006 (Configuration) | `__tests__/config.test.js` | Environment variable tests | 85%+ | 85%+ |
+| F-007 (Health Endpoint) | `__tests__/handlers/healthHandler.test.js`, `__tests__/utils/constants.test.js` | `__tests__/integration/health.test.js` | Global thresholds (no per-file entry) | 100% (`handlers/healthHandler.js`) |
 
 **Test Evidence Sources:**
 - Jest configuration: `src/backend/jest.config.js` (coverage thresholds)
 - Unit tests: `src/backend/__tests__/**/*.test.js`
-- Integration tests: `src/backend/__tests__/integration/api.test.js`
+- Integration tests: `src/backend/__tests__/integration/api.test.js`, `src/backend/__tests__/integration/health.test.js`
 - Coverage reports: Generated by Jest, enforced by CI
 
 ### 2.5.3 Requirement to Documentation Mapping
@@ -2849,6 +2918,7 @@ flowchart TB
 |---|---|---|
 | All Features (F-001 to F-011) | README.md | User guide, setup instructions |
 | API Endpoint (F-002) | README.md (API Reference) | Endpoint specification, examples |
+| Health Endpoint (F-007) | `README.md` and `src/backend/README.md` (`GET /health` API section) | Endpoint specification, request/response example |
 | Configuration (F-006) | README.md, .env.example, config.js | Environment variables, defaults |
 | Docker Deployment (F-009) | README.md, docker-compose.yml | Deployment guide, configuration |
 | Testing (F-011) | README.md, jest.config.js | Test execution, coverage targets |
@@ -2865,12 +2935,12 @@ flowchart TB
 | F-004 (Request Logging) | 18 | 16 | Mock verification, log output inspection |
 | F-005 (Security Headers) | 12 | 12 | Integration tests, header assertions |
 | F-006 (Configuration) | 21 | 18 | Unit tests, environment variable validation |
-| F-007 (Health Checking) | 12 | 12 | Docker healthcheck, health-check.sh script |
+| F-007 (Health Checking) | 26 | 26 | Docker healthcheck, health-check.sh script, `__tests__/handlers/healthHandler.test.js`, `__tests__/integration/health.test.js` |
 | F-008 (Graceful Shutdown) | 15 | 12 | Shutdown tests, signal handling verification |
 | F-009 (Containerization) | 21 | 18 | Docker build, container runtime, Docker Compose |
 | F-010 (Monitoring) | 15 | 12 | Prometheus scrape, Grafana dashboard verification |
 | F-011 (Testing) | 18 | 18 | Jest execution, coverage reports, CI integration |
-| **Total** | **177 Criteria** | **163 Testable** | **92% Automated Verification** |
+| **Total** | **191 Criteria** | **177 Testable** | **93% Automated Verification** |
 
 ## 2.6 References
 
@@ -2878,37 +2948,42 @@ flowchart TB
 
 **Core Application Files:**
 1. `src/backend/index.js` - Application entry point, signal handlers
-2. `src/backend/server.js` - HTTP server implementation, lifecycle management
-3. `src/backend/router.js` - Request routing logic
+2. `src/backend/server.js` - HTTP server implementation, lifecycle management, `createRoutes()` mapping `/hello` and `/health`
+3. `src/backend/router.js` - Request routing logic (not imported by `server.js`)
 4. `src/backend/config.js` - Configuration management and validation
 5. `src/backend/handlers/helloHandler.js` - Hello endpoint implementation
-6. `src/backend/handlers/error.js` - Error handlers (404, 405, 500)
-7. `src/backend/errorHandler.js` - Error handling utilities
-8. `src/backend/middleware/index.js` - Middleware implementations (logging, security)
-9. `src/backend/utils/constants.js` - Application constants and defaults
-10. `src/backend/utils/logger.js` - Logging utility
+6. `src/backend/handlers/healthHandler.js` - `GET /health` liveness handler (`handleHealthRequest`)
+7. `src/backend/handlers/error.js` - Error handlers (404, 405, 500)
+8. `src/backend/errorHandler.js` - Error handling utilities (`handle404`, `handle405`)
+9. `src/backend/middleware/index.js` - Middleware implementations (logging, security)
+10. `src/backend/utils/constants.js` - Application constants and defaults (including `MESSAGES.HEALTH_STATUS_UP`, `HEADERS.CONTENT_TYPE_JSON`)
+11. `src/backend/utils/logger.js` - Logging utility
 
 **Configuration Files:**
-11. `src/backend/package.json` - Project metadata, dependencies, scripts
-12. `src/backend/jest.config.js` - Test configuration, coverage thresholds
-13. `src/backend/nodemon.json` - Development auto-reload configuration
-14. `src/backend/Dockerfile` - Production container image definition
-15. `.env` - Environment variable configuration (referenced, not examined for security)
+12. `src/backend/package.json` - Project metadata, dependencies, scripts
+13. `src/backend/jest.config.js` - Test configuration, coverage thresholds
+14. `src/backend/nodemon.json` - Development auto-reload configuration
+15. `src/backend/Dockerfile` - Production container image definition
+16. `.env` - Environment variable configuration (referenced, not examined for security)
 
 **Test Files:**
-16. `src/backend/__tests__/handlers/helloHandler.test.js` - Hello handler unit tests
-17. `src/backend/__tests__/integration/api.test.js` - End-to-end integration tests
-18. `src/backend/__tests__/setup.js` - Test environment setup
+17. `src/backend/__tests__/handlers/helloHandler.test.js` - Hello handler unit tests
+18. `src/backend/__tests__/handlers/healthHandler.test.js` - Health handler unit tests (GET 200 JSON, query string, non-GET → `handle405`, error propagation)
+19. `src/backend/__tests__/integration/api.test.js` - End-to-end integration tests
+20. `src/backend/__tests__/integration/health.test.js` - Live-pipeline `/health` integration tests (ports 3101 and 3102)
+21. `src/backend/__tests__/utils/constants.test.js` - Constants tests, including `HEALTH_STATUS_UP` and `CONTENT_TYPE_JSON`
+22. `src/backend/__tests__/setup.js` - Test environment setup
 
 **Infrastructure Files:**
-19. `infrastructure/local/docker-compose.yml` - Local development orchestration
-20. `infrastructure/monitoring/prometheus.yml` - Prometheus configuration
-21. `infrastructure/monitoring/grafana-dashboard.json` - Grafana dashboard definition
-22. `infrastructure/scripts/health-check.sh` - Standalone health check script
+23. `infrastructure/local/docker-compose.yml` - Local development orchestration
+24. `infrastructure/monitoring/prometheus.yml` - Prometheus configuration
+25. `infrastructure/monitoring/grafana-dashboard.json` - Grafana dashboard definition
+26. `infrastructure/scripts/health-check.sh` - Standalone health check script
 
 **Documentation Files:**
-23. `src/backend/README.md` - Developer documentation and API reference
-24. Root `README.md` - Project overview and getting started guide
+27. `src/backend/README.md` - Developer documentation and API reference
+28. Root `README.md` - Project overview and getting started guide
+29. `src/backend/CHANGELOG.md` - Unreleased section records the `GET /health` endpoint and the `server.js` fix that loads `handlers/helloHandler.js`
 
 ### 2.6.2 Technical Specification Sections Referenced
 
@@ -4286,14 +4361,22 @@ flowchart TD
     Router --> RouteMatch{Match Route?}
     
     RouteMatch -->|pathname = '/hello'| MethodCheck{HTTP Method?}
+    RouteMatch -->|pathname = '/health'| HealthMethodCheck{HTTP Method?}
     RouteMatch -->|unknown path| Handle404[404 Handler<br/>handleNotFound&#40;&#41;]
     
     MethodCheck -->|GET| HelloHandler[Hello Handler<br/>helloHandler.js]
     MethodCheck -->|POST/PUT/DELETE/etc| Handle405[405 Handler<br/>handle405&#40;&#41;]
     
+    HealthMethodCheck -->|GET| HealthHandler[Health Handler<br/>healthHandler.js]
+    HealthMethodCheck -->|POST/PUT/DELETE/HEAD/etc| Handle405
+    
     HelloHandler --> SetStatus200[Set Status: 200 OK]
     SetStatus200 --> SetContentType[Set Content-Type: text/plain]
     SetContentType --> SendHello[Send Body: 'Hello world']
+    
+    HealthHandler --> SetStatus200H[Set Status: 200 OK]
+    SetStatus200H --> SetContentTypeJSON[Set Content-Type: application/json]
+    SetContentTypeJSON --> SendHealth[Send JSON Body<br/>status: 'up']
     
     Handle404 --> SetStatus404[Set Status: 404]
     SetStatus404 --> Send404[Send Body: 'Not Found']
@@ -4303,6 +4386,7 @@ flowchart TD
     SetAllow --> Send405[Send Body: 'Method Not Allowed']
     
     SendHello --> ErrorCheck{Error<br/>Occurred?}
+    SendHealth --> ErrorCheck
     Send404 --> ErrorCheck
     Send405 --> ErrorCheck
     
@@ -4320,14 +4404,15 @@ flowchart TD
     style Start fill:#e1f5e1
     style End fill:#e1f5e1
     style HelloHandler fill:#fff3cd
+    style HealthHandler fill:#fff3cd
     style Handle404 fill:#f8d7da
     style Handle405 fill:#f8d7da
     style Handle500 fill:#f8d7da
 ```
 
 **Key Decision Points:**
-- **Route Matching:** Direct pathname comparison against defined routes (`/hello`)
-- **Method Validation:** Only GET requests accepted for `/hello` endpoint
+- **Route Matching:** Direct `routes[pathname]` lookup against the two literal keys defined in `createRoutes()`: `/hello` and `/health`. The match is exact: `url.parse()` drops the query string, and `/health/` returns 404
+- **Method Validation:** Only GET requests accepted for `/hello` and `/health`; each handler checks the method itself and delegates any other method to `errorHandler.handle405(res)` (405, `Allow: GET`)
 - **Error Detection:** Try-catch blocks intercept exceptions throughout chain
 
 **Performance SLAs:**
@@ -4353,7 +4438,7 @@ sequenceDiagram
     participant Handler as Request Handler
     participant Logger
     
-    Client->>Server: HTTP GET /hello
+    Client->>Server: HTTP GET /hello or GET /health
     activate Server
     
     Server->>Middleware: Process Request
@@ -4371,8 +4456,8 @@ sequenceDiagram
     deactivate Middleware
     activate Router
     
-    Router->>Router: Parse URL: /hello
-    Router->>Router: Match Route Pattern
+    Router->>Router: Parse URL pathname
+    Router->>Router: Exact lookup routes[pathname]
     
     alt Route Found: /hello
         Router->>Handler: Invoke Hello Handler
@@ -4380,8 +4465,19 @@ sequenceDiagram
         
         Handler->>Handler: Validate Method = GET
         Handler->>Handler: Set Status 200
-        Handler->>Handler: Set Content-Type
-        Handler->>Handler: Generate Response Body
+        Handler->>Handler: Set Content-Type text/plain
+        Handler->>Handler: Generate Body "Hello world"
+        
+        Handler-->>Router: Response Ready
+        deactivate Handler
+    else Route Found: /health
+        Router->>Handler: Invoke Health Handler
+        activate Handler
+        
+        Handler->>Handler: Validate Method = GET
+        Handler->>Handler: Set Status 200
+        Handler->>Handler: Set Content-Type application/json
+        Handler->>Handler: Generate Body {"status":"up"}
         
         Handler-->>Router: Response Ready
         deactivate Handler
@@ -4407,7 +4503,7 @@ sequenceDiagram
     Middleware-->>Server: Response Complete
     deactivate Middleware
     
-    Server->>Client: HTTP 200 "Hello world"
+    Server->>Client: HTTP 200 "Hello world" or 200 JSON {"status":"up"}
     deactivate Server
     
     Note over Client,Server: Total Time: ~45ms
@@ -4592,7 +4688,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([Request Arrives at Server]) --> HandleRequest[handleRequest Function<br/>server.js line 76]
+    Start([Request Arrives at Server]) --> HandleRequest[handleRequest Function<br/>server.js line 79]
     
     HandleRequest --> ApplyMiddleware[Apply Middleware Chain<br/>applyMiddleware Utility]
     
@@ -4626,11 +4722,11 @@ flowchart TD
     CallNext3 --> IncrementIndex3[Index++]
     IncrementIndex3 --> NextMiddleware
     
-    FinalHandler --> ParseURL[Parse Request URL<br/>url.parse&#40;req.url&#41;]
+    FinalHandler --> ParseURL[Parse Request URL<br/>url.parse&#40;req.url, true&#41;]
     
     ParseURL --> ExtractPath[Extract pathname]
     
-    ExtractPath --> GetRoutes[Get Routes Mapping<br/>createRoutes&#40;&#41;]
+    ExtractPath --> GetRoutes[Get Routes Mapping<br/>createRoutes&#40;&#41;<br/>'/hello': handleHello<br/>'/health': handleHealthRequest]
     
     GetRoutes --> LookupRoute[routes pathname Lookup]
     
@@ -4703,52 +4799,49 @@ flowchart TD
 flowchart TD
     Start([Enter routeRequest Function]) --> ParseURL[Parse Request URL<br/>url.parse&#40;req.url, true&#41;]
     
-    ParseURL --> ExtractParts[Extract Components<br/>- pathname<br/>- query parameters]
+    ParseURL --> ExtractParts[Extract pathname<br/>query string not used for routing]
     
     ExtractParts --> GetRoutes[Get Routes Configuration<br/>createRoutes&#40;&#41;]
     
-    GetRoutes --> RoutesMap[Routes Object:<br/>'  /hello ': handleHello]
+    GetRoutes --> RoutesMap[Routes Object:<br/>'/hello': handleHello<br/>'/health': handleHealthRequest]
     
-    RoutesMap --> Normalize[Normalize pathname<br/>Trim whitespace<br/>Handle trailing slash]
-    
-    Normalize --> DirectLookup[Direct Lookup<br/>routes pathname]
+    RoutesMap --> DirectLookup[Direct Lookup by pathname<br/>exact match, no normalization]
     
     DirectLookup --> HandlerExists{Handler<br/>Found?}
     
-    HandlerExists -->|Yes pathname = '/hello'| LogRoute[Log: Routing to /hello]
-    HandlerExists -->|No| LogNotFound[Log: Route Not Found]
+    HandlerExists -->|pathname = '/hello'| HelloEntry[handleHello<br/>handlers/helloHandler.js<br/>info log: Handling request to /hello]
+    HandlerExists -->|pathname = '/health'| HealthEntry[handleHealthRequest<br/>handlers/healthHandler.js<br/>info log: Handling request to /health]
+    HandlerExists -->|No match, e.g. /health/| Invoke404[Invoke 404 Handler<br/>handleNotFound&#40;req, res&#41;]
     
-    LogRoute --> CheckMethod[Extract HTTP Method<br/>req.method]
+    HelloEntry --> HelloMethod{Method<br/>= 'GET'?}
+    HealthEntry --> HealthMethod{Method<br/>= 'GET'?}
     
-    CheckMethod --> MethodValidation{Method<br/>= 'GET'?}
+    HelloMethod -->|Yes| SetStatus200[Set statusCode = 200]
+    HelloMethod -->|No| LogUnsupported[logger.error:<br/>Received unsupported method]
+    HealthMethod -->|Yes| SetStatus200H[Set statusCode = 200]
+    HealthMethod -->|No| LogUnsupported
     
-    MethodValidation -->|Yes| InvokeHello[Invoke Hello Handler<br/>handlers/helloHandler.js]
-    MethodValidation -->|No| Invoke405[Invoke 405 Handler<br/>handle405&#40;res&#41;]
-    
-    LogNotFound --> Invoke404[Invoke 404 Handler<br/>handleNotFound&#40;req, res&#41;]
-    
-    InvokeHello --> HelloLogic{Handler<br/>Execution}
-    Invoke405 --> Handle405Logic{405<br/>Logic}
-    Invoke404 --> Handle404Logic{404<br/>Logic}
-    
-    HelloLogic -->|Success| SetStatus200[Set statusCode = 200]
-    HelloLogic -->|Error| ThrowError[Throw Exception]
+    LogUnsupported --> Invoke405[Invoke 405 Handler<br/>errorHandler.handle405&#40;res&#41;]
     
     SetStatus200 --> SetContentType[Set Header<br/>Content-Type: text/plain]
-    
     SetContentType --> WriteBody[Write Response Body<br/>'Hello world']
-    
     WriteBody --> EndResponse200[Call res.end&#40;&#41;]
     
-    Handle405Logic --> SetStatus405[Set statusCode = 405]
-    SetStatus405 --> SetAllow[Set Header<br/>Allow: GET]
+    SetStatus200H --> SetContentTypeJSON[Set Header<br/>Content-Type: application/json]
+    SetContentTypeJSON --> WriteBodyJSON[Write Response Body<br/>JSON.stringify of status: 'up']
+    WriteBodyJSON --> EndResponseJSON[Call res.end&#40;&#41;]
+    
+    Invoke405 --> SetStatus405[Set statusCode = 405]
+    SetStatus405 --> SetAllow[Set Headers<br/>Content-Type: text/plain<br/>Allow: GET]
     SetAllow --> WriteBody405[Write Body<br/>'Method Not Allowed']
     WriteBody405 --> EndResponse405[Call res.end&#40;&#41;]
     
-    Handle404Logic --> SetStatus404[Set statusCode = 404]
+    Invoke404 --> SetStatus404[Set statusCode = 404]
     SetStatus404 --> WriteBody404[Write Body<br/>'Not Found']
     WriteBody404 --> EndResponse404[Call res.end&#40;&#41;]
     
+    HelloEntry -.->|synchronous throw| ThrowError[Handler Throws Exception]
+    HealthEntry -.->|synchronous throw| ThrowError
     ThrowError --> CatchError[Error Caught by Middleware]
     CatchError --> Invoke500[Invoke 500 Handler<br/>handleServerError&#40;req, res, err&#41;]
     
@@ -4758,36 +4851,44 @@ flowchart TD
     WriteBody500 --> EndResponse500[Call res.end&#40;&#41;]
     
     EndResponse200 --> End([Response Complete])
+    EndResponseJSON --> End
     EndResponse405 --> End
     EndResponse404 --> End
     EndResponse500 --> End
     
     style Start fill:#e1f5e1
     style End fill:#e1f5e1
-    style InvokeHello fill:#d4edda
+    style HelloEntry fill:#d4edda
+    style HealthEntry fill:#d4edda
     style Invoke404 fill:#f8d7da
     style Invoke405 fill:#f8d7da
     style Invoke500 fill:#f8d7da
 ```
 
+The routes object returned by `createRoutes()` in `src/backend/server.js` is `{ '/hello': handleHello, '/health': handleHealthRequest }`. `handleHello` is `handleHelloRequest` imported from `./handlers/helloHandler` under an alias; `handleHealthRequest` is imported from `./handlers/healthHandler`.
+
 **Route Matching Algorithm:**
-1. Parse URL to extract pathname
-2. Normalize pathname (trim, handle trailing slash)
-3. Direct object lookup: `routes[pathname]`
+1. Parse URL with `url.parse(req.url, true)` and take `pathname`; the query string plays no part in routing (`/health?probe=1` reaches the health handler)
+2. Direct object lookup: `routes[pathname]` against the literal keys `'/hello'` and `'/health'`
+3. No normalization: no trimming and no trailing-slash handling, so `/health/` and `/hello/` return 404
 4. No pattern matching or regex (simple string equality)
 5. Case-sensitive comparison
 
 **Constants Used (from `src/backend/utils/constants.js`):**
-- `ROUTES.HELLO`: '/hello'
+- `ROUTES.HELLO`: '/hello' (`ROUTES` defines only `HELLO`; `server.js` registers both paths as literal keys and does not read `ROUTES`)
 - `HTTP_METHODS.GET`: 'GET'
 - `HTTP_STATUS.OK`: 200
 - `HTTP_STATUS.NOT_FOUND`: 404
 - `HTTP_STATUS.METHOD_NOT_ALLOWED`: 405
 - `HTTP_STATUS.INTERNAL_SERVER_ERROR`: 500
 - `MESSAGES.HELLO_RESPONSE`: 'Hello world'
+- `MESSAGES.HEALTH_STATUS_UP`: 'up'
 - `MESSAGES.NOT_FOUND`: 'Not Found'
 - `MESSAGES.METHOD_NOT_ALLOWED`: 'Method Not Allowed'
 - `MESSAGES.SERVER_ERROR`: 'Internal Server Error'
+- `HEADERS.CONTENT_TYPE_TEXT`: 'text/plain'
+- `HEADERS.CONTENT_TYPE_JSON`: 'application/json'
+- `HEADERS.ALLOW`: 'Allow'
 
 ### 4.2.4 Graceful Shutdown Workflow
 
@@ -5194,7 +5295,7 @@ sequenceDiagram
     participant Prometheus
     participant App as Hello World App
     participant Metrics as /metrics Endpoint
-    participant Health as /hello Endpoint
+    participant Health as /health Endpoint
     
     Note over Prometheus: Scrape Interval: 5 seconds
     
@@ -5216,24 +5317,24 @@ sequenceDiagram
         Note over Prometheus: Wait 5 seconds
     end
     
-    Note over Prometheus: Health Scrape Interval: 30 seconds
+    Note over Prometheus: Health Scrape Interval: 30 seconds, Timeout: 5 seconds
     
     loop Health Monitoring
-        Prometheus->>Health: HTTP GET /hello
+        Prometheus->>Health: HTTP GET /health
         activate Health
         
         Health->>App: Route Request
         activate App
-        App->>App: Process Request<br/>Hello Handler
-        App-->>Health: "Hello world"
+        App->>App: Process Request<br/>Health Handler
+        App-->>Health: {"status":"up"}
         deactivate App
         
-        alt Service Healthy
-            Health-->>Prometheus: 200 OK<br/>"Hello world"
-            Note over Prometheus: Set up{job="hello-world-health"}=1
-        else Service Unhealthy
-            Health-->>Prometheus: Non-200 Status<br/>or Timeout
-            Note over Prometheus: Set up{job="hello-world-health"}=0
+        alt Service Running
+            Health-->>Prometheus: 200 OK<br/>Content-Type: application/json<br/>{"status":"up"}
+            Note over Prometheus: JSON is not exposition format<br/>Scrape fails to parse<br/>up{job="hello-world-health"}=0
+        else Service Down
+            Health-->>Prometheus: Connection Error<br/>or Timeout
+            Note over Prometheus: up{job="hello-world-health"}=0
         end
         
         deactivate Health
@@ -5255,10 +5356,11 @@ sequenceDiagram
 
 **Job 2: Health Monitoring**
 - Job Name: `hello-world-health`
-- Target: `hello-world-app:3000/hello`
+- Target: `hello-world-app:3000/health` (`metrics_path: '/health'`)
 - Scrape Interval: 30 seconds
 - Scrape Timeout: 5 seconds
-- **Status:** Fully functional using existing `/hello` endpoint
+- Application response: `200 OK`, `Content-Type: application/json`, body `{"status":"up"}`
+- **Status:** Not functional. Prometheus cannot parse the JSON body as exposition format, so every scrape fails and `up{job="hello-world-health"}` stays 0 even while the service is running
 
 **Expected Metrics Schema:**
 ```
@@ -5287,6 +5389,8 @@ nodejs_event_loop_lag_seconds 0.001
 up{job="hello-world-app", instance="hello-world-app:3000"} 1
 up{job="hello-world-health", instance="hello-world-app:3000"} 1
 ```
+
+The availability values above show the intended state. With the current configuration, `up{job="hello-world-health"}` is 0 because the `/health` response is JSON.
 
 #### 4.3.3.2 Grafana Dashboard Visualization
 
@@ -5431,7 +5535,7 @@ flowchart TD
 12. **Endpoint Traffic:** Request distribution by path
 13. **Custom Metrics:** Application-specific metrics
 
-**Implementation Note:** Dashboard expects metrics from a `/metrics` endpoint which may not be fully implemented in the application. The health monitoring aspect (Panel 2) is fully functional using the `/hello` endpoint.
+**Implementation Note:** Dashboard expects metrics from a `/metrics` endpoint which may not be fully implemented in the application. Panel 2 (Health Check Status, query `up{job="hello-world-health"}`) reports the service as down: its job scrapes the implemented `/health` endpoint, but Prometheus cannot parse the JSON body, so the series stays 0.
 
 ## 4.4 State Management and Lifecycle
 
@@ -5564,20 +5668,25 @@ stateDiagram-v2
     
     URL_PARSED --> ROUTE_LOOKUP: Lookup pathname in Routes
     
-    ROUTE_LOOKUP --> HANDLER_MATCHED: Route Found
-    ROUTE_LOOKUP --> HANDLER_404: Route Not Found
+    ROUTE_LOOKUP --> HANDLER_MATCHED: Exact Match /hello or /health
+    ROUTE_LOOKUP --> HANDLER_404: No Exact Match, e.g. /health/
     
-    HANDLER_MATCHED --> METHOD_CHECK: Validate HTTP Method
+    HANDLER_MATCHED --> METHOD_CHECK: Handler Validates HTTP Method
     
     METHOD_CHECK --> HANDLER_HELLO: Method = GET, Path = /hello
-    METHOD_CHECK --> HANDLER_405: Method != GET
+    METHOD_CHECK --> HANDLER_HEALTH: Method = GET, Path = /health
+    METHOD_CHECK --> HANDLER_405: Method != GET on /hello or /health
     
     HANDLER_HELLO --> GENERATING_RESPONSE: Execute Hello Handler
+    HANDLER_HEALTH --> GENERATING_HEALTH_RESPONSE: Execute Health Handler
     HANDLER_404 --> GENERATING_ERROR_404: Execute 404 Handler
     HANDLER_405 --> GENERATING_ERROR_405: Execute 405 Handler
     
-    GENERATING_RESPONSE --> RESPONSE_READY: Set Status 200, Headers, Body
+    GENERATING_RESPONSE --> RESPONSE_READY: Set Status 200, text/plain, Body
     GENERATING_RESPONSE --> EXCEPTION_THROWN: Uncaught Exception
+    
+    GENERATING_HEALTH_RESPONSE --> RESPONSE_READY: Set Status 200, application/json, JSON Body
+    GENERATING_HEALTH_RESPONSE --> EXCEPTION_THROWN: Uncaught Exception
     
     GENERATING_ERROR_404 --> RESPONSE_READY: Set Status 404, Body
     GENERATING_ERROR_405 --> RESPONSE_READY: Set Status 405, Allow Header, Body
@@ -5627,6 +5736,12 @@ stateDiagram-v2
         "Hello world"
     end note
     
+    note right of HANDLER_HEALTH
+        Liveness Path
+        Returns 200 JSON
+        status up
+    end note
+    
     note right of EXCEPTION_THROWN
         Any Uncaught Error
         in Handler or
@@ -5653,6 +5768,7 @@ stateDiagram-v2
 - **LOGGING_START:** Requires writable `req` and `res` objects
 - **ROUTING:** Requires `req.url`, `req.method` properties
 - **HANDLER_HELLO:** Requires `res` object for status, headers, body
+- **HANDLER_HEALTH:** Requires `res` object for status, the `Content-Type: application/json` header, and the `{"status":"up"}` body
 - **CALCULATING_TIME:** Requires `startTime` from closure
 - **LOGGING_RESPONSE:** Requires `req.method`, `req.url`, `res.statusCode`, `responseTime`
 
@@ -5820,9 +5936,9 @@ flowchart TD
 - **Logging Level:** WARN (client error, not server error)
 
 **Trigger Conditions:**
-- Request path does not match `/hello`
-- No route handler found for pathname
-- Invoked by router after route lookup failure
+- Request path matches neither `/hello` nor `/health` exactly (e.g. `/health/`, `/hello/`, `/unknown`)
+- No route handler found for pathname in the `createRoutes()` mapping
+- Invoked by `routeRequest` in `server.js` after the `routes[pathname]` lookup fails
 
 #### 4.5.2.2 405 Method Not Allowed Handler Flow
 
@@ -5854,7 +5970,7 @@ flowchart TD
     
     FinalLog --> ClientAction{Client<br/>Next Action?}
     
-    ClientAction -->|Retry with GET| ValidRequest[Client Sends GET /hello]
+    ClientAction -->|Retry with GET| ValidRequest[Client Sends GET /hello or GET /health]
     ClientAction -->|Different Endpoint| OtherRequest[Client Tries Different Path]
     ClientAction -->|Give Up| NoRetry[No Further Requests]
     
@@ -5878,9 +5994,9 @@ flowchart TD
 - **Logging Level:** INFO initially, WARN in final request log (status >= 400)
 
 **Trigger Conditions:**
-- Request to `/hello` endpoint with non-GET method
-- Method validation in `helloHandler.js` detects invalid method
-- Invoked by handler after method check failure
+- Request to `/hello` or `/health` with any non-GET method (e.g. POST, PUT, DELETE, HEAD)
+- Method validation inside `helloHandler.js` or `healthHandler.js` detects the invalid method and logs it at error level
+- Both handlers call `errorHandler.handle405(res)`, which writes `text/plain` "Method Not Allowed" with `Allow: GET`
 
 **HTTP Specification Compliance:**
 - Allow header required by RFC 7231 for 405 responses
@@ -5947,6 +6063,37 @@ flowchart TD
 - Primary: `src/backend/handlers/error.js` - `handleServerError()` function (lines 65-77)
 - Alternative: `src/backend/errorHandler.js` - `handleRequestError()` function (lines 18-33)
 
+**Route Handler Throw Path:**
+
+A synchronous throw from a route handler before the response is written is caught on the middleware error path. Each step of `createMiddlewareChain` (`src/backend/middleware/index.js`) runs inside a try/catch that forwards the error through `next(err)` to `errorMiddleware`, and `applyMiddleware` wraps the whole chain in a second try/catch; both call `handleServerError` in `src/backend/handlers/error.js`. The path is exercised for `/health` by `__tests__/integration/health.test.js`, which loads a server whose health handler always throws.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Chain as Middleware Chain
+    participant Sec as securityHeaders
+    participant Route as routeRequest
+    participant Handler as Route Handler
+    participant Err as handleServerError
+    
+    Client->>Chain: GET /health
+    Chain->>Sec: securityHeaders(req, res, next)
+    Sec->>Sec: Set X-Content-Type-Options, X-Frame-Options, CSP
+    Sec->>Route: next()
+    Route->>Handler: handler(req, res)
+    Handler--xRoute: Throws before writing the response
+    Route--xChain: Exception propagates
+    Chain->>Chain: try/catch, next(err), errorMiddleware
+    Chain->>Err: handleServerError(req, res, err)
+    Err-->>Client: 500 text/plain "Internal Server Error" (security headers retained)
+    Client->>Chain: GET /hello (follow-up)
+    Chain-->>Client: 200 "Hello world"
+```
+
+- **Response:** `500`, `Content-Type: text/plain`, body "Internal Server Error"
+- **Headers:** The security headers set by `securityHeaders` before the throw remain on the 500 response
+- **Continuity:** The server keeps serving; the same server answers a follow-up `GET /hello` with 200
+
 **Response Characteristics:**
 - **Status Code:** 500 (HTTP_STATUS.INTERNAL_SERVER_ERROR)
 - **Content-Type:** text/plain
@@ -5973,7 +6120,7 @@ flowchart TD
    - Error details available for debugging
 
 **Trigger Conditions:**
-- Uncaught exception in request handler
+- Uncaught exception in request handler, including a synchronous throw from the `/hello` or `/health` handler before the response is written
 - Synchronous error thrown in middleware
 - Unhandled promise rejection (if not caught earlier)
 - Unexpected runtime errors
@@ -6091,15 +6238,18 @@ flowchart TD
     
     DiscoverTests --> RunUnit[Run Unit Tests]
     DiscoverTests --> RunIntegration[Run Integration Tests]
+    DiscoverTests --> RunHealthIntegration[Run Health Integration Suite<br/>__tests__/integration/health.test.js]
     
     RunUnit --> ConfigTests[Test: config.test.js<br/>Configuration Loading and Validation]
     RunUnit --> RouterTests[Test: router.test.js<br/>Route Matching Logic]
     RunUnit --> HandlerTests[Test: handlers/*.test.js<br/>Handler Functions]
+    RunUnit --> HealthHandlerTests[Test: handlers/healthHandler.test.js<br/>GET 200 JSON, query string,<br/>POST/PUT/DELETE/HEAD to handle405,<br/>error propagation]
     RunUnit --> UtilTests[Test: utils/*.test.js<br/>Utility Functions]
     
     ConfigTests --> ConfigResult{Tests<br/>Pass?}
     RouterTests --> RouterResult{Tests<br/>Pass?}
     HandlerTests --> HandlerResult{Tests<br/>Pass?}
+    HealthHandlerTests --> HealthHandlerResult{Tests<br/>Pass?}
     UtilTests --> UtilResult{Tests<br/>Pass?}
     
     ConfigResult -->|Pass| ConfigCoverage[Check Coverage:<br/>config.js]
@@ -6108,8 +6258,11 @@ flowchart TD
     RouterResult -->|Pass| RouterCoverage[Check Coverage:<br/>router.js]
     RouterResult -->|Fail| UnitFailed
     
-    HandlerResult -->|Pass| HandlerCoverage[Check Coverage:<br/>handlers/hello.js 100%<br/>handlers/error.js 90%+]
+    HandlerResult -->|Pass| HandlerCoverage[Check Coverage:<br/>key ./handlers/hello.js 100%, matches no file<br/>handlers/error.js 90%+]
     HandlerResult -->|Fail| UnitFailed
+    
+    HealthHandlerResult -->|Pass| HealthCoverage[Check Coverage:<br/>handlers/healthHandler.js<br/>global thresholds only]
+    HealthHandlerResult -->|Fail| UnitFailed
     
     UtilResult -->|Pass| UtilCoverage[Check Coverage:<br/>utils/*.js]
     UtilResult -->|Fail| UnitFailed
@@ -6117,6 +6270,7 @@ flowchart TD
     ConfigCoverage --> CheckGlobal{Global Coverage<br/>Thresholds Met?}
     RouterCoverage --> CheckGlobal
     HandlerCoverage --> CheckGlobal
+    HealthCoverage --> CheckGlobal
     UtilCoverage --> CheckGlobal
     
     CheckGlobal -->|No| CoverageFailed[Coverage Below Thresholds:<br/>Branches 80%<br/>Functions 90%<br/>Lines 85%]
@@ -6150,6 +6304,22 @@ flowchart TD
     
     ErrorResult -->|Pass| Verify500[Verify Generic Error Response]
     ErrorResult -->|Fail| IntegrationFailed
+    
+    RunHealthIntegration --> StartHealthServer[Start Real Server<br/>startServer&#40;&#41; on PORT 3101]
+    
+    StartHealthServer --> HealthLive[Supertest Requests:<br/>GET /health → 200 JSON + security headers<br/>GET /health?probe=1 → 200 + one log entry<br/>POST /health → 405 Allow: GET<br/>GET /health/ → 404<br/>GET and POST /hello regression]
+    
+    HealthLive --> HealthLiveResult{Pass?}
+    HealthLiveResult -->|Fail| IntegrationFailed
+    HealthLiveResult -->|Pass| StartIsolated[Start Isolated Server on PORT 3102<br/>jest.doMock throwing health handler]
+    
+    StartIsolated --> Health500[GET /health → 500 text/plain<br/>security headers retained<br/>then GET /hello → 200]
+    
+    Health500 --> Health500Result{Pass?}
+    Health500Result -->|Fail| IntegrationFailed
+    Health500Result -->|Pass| CloseConns[closeAllConnections&#40;&#41;<br/>then stopServer&#40;&#41; per server]
+    
+    CloseConns --> IntegrationComplete
     
     VerifyHeaders --> IntegrationComplete[Integration Tests Complete]
     Verify404 --> IntegrationComplete
@@ -6191,16 +6361,16 @@ flowchart TD
 
 **Test Configuration (from `src/backend/jest.config.js`):**
 
-**Coverage Thresholds:**
+**Coverage Thresholds (as configured):**
 ```javascript
-coverageThresholds: {
+coverageThreshold: {
   global: {
     branches: 80,
     functions: 90,
     lines: 85,
     statements: 85
   },
-  './handlers/helloHandler.js': {
+  './handlers/hello.js': {
     branches: 100,
     functions: 100,
     lines: 100,
@@ -6215,12 +6385,14 @@ coverageThresholds: {
 }
 ```
 
+The `'./handlers/hello.js'` key matches no file (the hello handler is `handlers/helloHandler.js`), so Jest reports `Coverage data for ./handlers/hello.js was not found.` No per-file threshold covers `handlers/healthHandler.js`; it falls under the global thresholds. Current suite and coverage results are recorded in Section 6.6.
+
 **Test Categories:**
 
 1. **Unit Tests (Isolated Component Testing):**
    - Configuration: Environment variable loading and validation
    - Router: Path matching and normalization
-   - Handlers: Request/response logic for each endpoint
+   - Handlers: Request/response logic for each endpoint, including `__tests__/handlers/healthHandler.test.js` (logger and `errorHandler` mocked)
    - Utilities: Helper functions and constants
    - Mocking: Heavy use of jest.mock() for isolation
 
@@ -6230,6 +6402,7 @@ coverageThresholds: {
    - Supertest for HTTP assertions
    - Middleware chain verification
    - Security headers validation
+   - `__tests__/integration/health.test.js`: real `startServer()` on PORT 3101 covering `GET /health` 200 JSON with security headers, the query-string request, `POST /health` 405, `GET /health/` 404, and the `/hello` regression; a second isolated server on PORT 3102 uses a throwing health handler to test the 500 path. Open connections are closed with `closeAllConnections()` before each `stopServer()`
 
 **Test Execution Commands:**
 - `npm test`: Run all tests once
@@ -6249,11 +6422,12 @@ coverageThresholds: {
 
 **Core Application Files:**
 - `src/backend/index.js` - Application entry point, graceful shutdown signal handling
-- `src/backend/server.js` - HTTP server lifecycle management, request handling, startServer/stopServer functions
-- `src/backend/router.js` - URL routing and path matching logic
+- `src/backend/server.js` - HTTP server lifecycle management, request handling, startServer/stopServer functions, `createRoutes()` mapping `/hello` and `/health`
+- `src/backend/router.js` - URL routing and path matching logic (not imported by `server.js`)
 - `src/backend/config.js` - Configuration loading, environment variable validation, default values
 - `src/backend/errorHandler.js` - Centralized error handling utilities
 - `src/backend/handlers/helloHandler.js` - /hello endpoint implementation
+- `src/backend/handlers/healthHandler.js` - /health liveness endpoint implementation (`handleHealthRequest`)
 - `src/backend/handlers/error.js` - Error response handlers (404, 405, 500)
 - `src/backend/middleware/index.js` - Request logger, security headers, middleware composition
 - `src/backend/utils/constants.js` - HTTP status codes, routes, messages, headers
@@ -6270,7 +6444,9 @@ coverageThresholds: {
 - `src/backend/jest.config.js` - Jest configuration with coverage thresholds
 - `src/backend/__tests__/setup.js` - Test environment setup and mocks
 - `src/backend/__tests__/integration/api.test.js` - End-to-end integration tests
+- `src/backend/__tests__/integration/health.test.js` - Live-pipeline `/health` integration tests (PORT 3101, isolated 500-path server on PORT 3102)
 - `src/backend/__tests__/handlers/*.test.js` - Handler unit tests
+- `src/backend/__tests__/handlers/healthHandler.test.js` - Health handler unit tests
 
 **Configuration Files:**
 - `src/backend/Dockerfile` - Multi-stage Docker build configuration
@@ -6325,8 +6501,8 @@ coverageThresholds: {
 
 ### 4.7.4 Implementation Notes
 
-**Metrics Endpoint Status:**
-The monitoring configuration references a `/metrics` endpoint for Prometheus scraping (infrastructure/monitoring/prometheus.yml), however, the implementation of this endpoint was not verified in the application source code during documentation. The health monitoring functionality using the `/hello` endpoint is fully functional. Full observability integration would require implementing metrics instrumentation, likely using the `prom-client` npm package, and exposing the `/metrics` endpoint in the router configuration.
+**Metrics and Health Endpoint Status:**
+The monitoring configuration references a `/metrics` endpoint for Prometheus scraping (infrastructure/monitoring/prometheus.yml); this endpoint is not implemented in the application source code. The `/health` endpoint is implemented as a JSON liveness endpoint (`200 OK`, `application/json`, `{"status":"up"}`), but the `hello-world-health` Prometheus job cannot ingest that body because it is not Prometheus exposition format, so `up{job="hello-world-health"}` stays 0. The Docker Compose healthcheck and `health-check.sh` probe `/hello`. Full observability integration would require implementing metrics instrumentation, likely using the `prom-client` npm package, and exposing the `/metrics` endpoint in the router configuration.
 
 **Connection Draining Timeout:**
 The graceful shutdown implementation uses Node.js default behavior for connection draining (server.close()) without explicit timeout enforcement. Production systems typically enforce a maximum shutdown timeout (e.g., 30 seconds) followed by forced termination to prevent indefinite waits. This implementation prioritizes simplicity and educational clarity over production-hardened timeout handling.
@@ -6403,11 +6579,12 @@ The system operates as a standalone service with minimal external dependencies:
 | **index.js** | Application lifecycle management: bootstrap, startup coordination, graceful shutdown | server.js, config.js, logger.js | Process signals (SIGINT/SIGTERM), Node.js runtime |
 | **server.js** | HTTP server creation and request pipeline orchestration | Native http module, url module, middleware/, handlers/ | PORT/HOST binding, middleware chain execution |
 | **config.js** | Environment configuration loading, validation, and management | dotenv, native path module | process.env, .env file, environment flags |
-| **router (server.js)** | URL path to handler mapping and request dispatching | Native url module, handlers/ | createRoutes() mapping, pathname extraction |
+| **router (server.js)** | URL path to handler mapping and request dispatching | Native url module, handlers/ | createRoutes() mapping of `/hello` and `/health`, pathname extraction |
 
 | Component Name | Primary Responsibility | Key Dependencies | Integration Points |
 |---|---|---|---|
 | **helloHandler.js** | `/hello` endpoint business logic and response generation | constants.js, logger.js, errorHandler.js | HTTP method validation, response construction |
+| **healthHandler.js** | `/health` liveness responses: GET-only, JSON body `{"status":"up"}` | constants.js, logger.js, errorHandler.js | HTTP method validation, JSON response construction |
 | **errorHandler.js** | Centralized error response generation for all error types | constants.js, logger.js | 404/405/500 status handling, EADDRINUSE detection |
 | **middleware/index.js** | Request lifecycle middleware: timing, security, error handling | logger.js, handlers/error.js | res.end wrapping, header injection, try/catch wrapper |
 | **utils/constants.js** | Application-wide constants and configuration values | None (pure constants) | HTTP status codes, routes, messages, headers |
@@ -6438,10 +6615,10 @@ The `securityHeaders` middleware executes next, injecting three HTTP security he
 These headers are applied regardless of the response status or handler outcome, ensuring consistent security posture.
 
 **Step 4: URL Parsing and Routing**
-The `routeRequest` function in `server.js` parses the request URL using the native `url.parse()` method to extract the pathname. The pathname is matched against the routes object returned by `createRoutes()`, which maps `/hello` to the `handleHello` handler. If no route matches, the request proceeds to the 404 Not Found handler.
+The `routeRequest` function in `server.js` parses the request URL using the native `url.parse()` method to extract the pathname. The pathname is looked up directly in the routes object returned by `createRoutes()`, which maps `/hello` to the `handleHello` handler and `/health` to the `handleHealthRequest` handler. The match is exact (no trailing-slash normalization); if no route matches, the request proceeds to the 404 Not Found handler.
 
 **Step 5: Handler Execution**
-For requests to `/hello`, the `handleHello` handler executes with method validation. If the HTTP method is GET, the handler generates a 200 OK response with `Content-Type: text/plain` and body "Hello world". For other HTTP methods (POST, PUT, DELETE, etc.), the handler invokes `handle405` from `errorHandler.js`, returning a 405 Method Not Allowed response with an `Allow: GET` header indicating the supported method.
+For requests to `/hello`, the `handleHello` handler executes with method validation. If the HTTP method is GET, the handler generates a 200 OK response with `Content-Type: text/plain` and body "Hello world". For requests to `/health`, the `handleHealthRequest` handler answers GET with a 200 OK response, `Content-Type: application/json`, and body `{"status":"up"}`. For other HTTP methods (POST, PUT, DELETE, etc.) on either path, the handler invokes `handle405` from `errorHandler.js`, returning a 405 Method Not Allowed response with an `Allow: GET` header indicating the supported method.
 
 **Step 6: Response Completion and Logging**
 When `res.end()` is called with the response body, the wrapped version from `requestLogger` executes. It captures the completion timestamp, calculates the elapsed time since request start, and logs the formatted message: `{method} {url} {statusCode} {responseTime}ms`. The log output is written to stdout (suppressed when IS_TEST=true) and captured by Docker for centralized collection.
@@ -6487,7 +6664,7 @@ During server startup, the `startServer()` function registers an 'error' event l
 | System Name | Integration Type | Data Exchange Pattern | Protocol/Format |
 |---|---|---|---|
 | **Prometheus** | Metrics Collection | Pull-based HTTP scraping | HTTP GET /metrics (Prometheus exposition format) |
-| **Prometheus Health** | Availability Monitoring | Pull-based HTTP scraping | HTTP GET /health (up/down status) |
+| **Prometheus Health** | Availability Monitoring | Pull-based HTTP scraping | HTTP GET /health, which returns `application/json` `{"status":"up"}`, not Prometheus exposition format |
 | **Docker Engine** | Container Runtime | Container lifecycle management | Docker API (REST over Unix socket) |
 | **Host Environment** | Configuration Input | Environment variable reading | KEY=value format, read-only at startup |
 
@@ -6506,7 +6683,7 @@ During server startup, the `startServer()` function registers an 'error' event l
 - **Configuration Loading**: No SLA—read once at startup, no runtime reconfiguration
 - **Logging Output**: Fire-and-forget—no delivery guarantee or backpressure handling
 
-**Implementation Status Note**: The monitoring infrastructure (Prometheus configuration, Grafana dashboard with 13 panels) is fully provisioned in `infrastructure/monitoring/`, but the application does not currently expose `/metrics` or `/health` endpoints. Full observability functionality requires implementing metrics instrumentation using the `prom-client` library.
+**Implementation Status Note**: The monitoring infrastructure (Prometheus configuration, Grafana dashboard with 13 panels) is fully provisioned in `infrastructure/monitoring/`. Only the `/metrics` endpoint and the `prom-client` instrumentation are missing from the application. The `/health` endpoint exists, but the `hello-world-health` scrape cannot use its JSON body, so that job reports the target down. The Docker Compose healthcheck probes `/hello`.
 
 ## 5.2 Component Details
 
@@ -6603,6 +6780,17 @@ The `server.js` module implements the core HTTP server with five primary respons
 - **Promise-Based APIs**: startServer() and stopServer() return promises for async control
 - **Event Emitter Pattern**: Leverages Node.js event emitter for server lifecycle events
 
+#### Handler Imports
+
+`server.js` loads its route handlers from the `handlers/` directory:
+
+```javascript
+const { handleHelloRequest: handleHello } = require('./handlers/helloHandler');
+const { handleHealthRequest } = require('./handlers/healthHandler');
+```
+
+The 404 and 500 handlers (`handleNotFound`, `handleServerError`) come from `./handlers/error`, and the middleware functions from `./middleware/index`.
+
 #### Key Interfaces and APIs
 
 **startServer() Function**:
@@ -6635,7 +6823,7 @@ Error Handling: try/catch wraps handler invocation, 500 on errors
 ```
 function createRoutes()
 Returns: Object<string, Function> (path → handler mapping)
-Current Routes: { '/hello': handleHello }
+Current Routes: { '/hello': handleHello, '/health': handleHealthRequest }
 Extensibility: Additional routes added to returned object
 ```
 
@@ -6830,7 +7018,7 @@ Algorithm: O(1) object property lookup for route matching
 ```
 function createRoutes()
 Returns: { [pathname: string]: Function }
-Current Mapping: { '/hello': handleHello }
+Current Mapping: { '/hello': handleHello, '/health': handleHealthRequest }
 Extension Pattern: Add new routes to returned object
 ```
 
@@ -6839,9 +7027,9 @@ Extension Pattern: Add new routes to returned object
 The routing implementation uses a simple exact-match algorithm:
 
 1. **Parse URL**: Extract pathname using `url.parse(req.url, true).pathname`
-2. **Normalize Path**: No normalization—exact string match required
+2. **Normalize Path**: No normalization—exact string match required (`/health/` returns 404)
 3. **Lookup Handler**: Access `routes[pathname]` property
-4. **Invoke or 404**: If handler exists, invoke it; otherwise call `handle404`
+4. **Invoke or 404**: If handler exists, invoke it; otherwise call `handleNotFound` from `handlers/error.js`
 
 **Routing Limitations**:
 - No path parameters (e.g., `/users/:id`)
@@ -6855,7 +7043,7 @@ These limitations are intentional design choices for educational clarity, demons
 #### Scaling Considerations
 
 **Route Table Size**:
-Object property lookup is O(1) average case, making route matching performant even with hundreds of routes. The current implementation with a single route incurs negligible overhead.
+Object property lookup is O(1) average case, making route matching performant even with hundreds of routes. The current implementation with two routes incurs negligible overhead.
 
 **Adding New Routes**:
 To add a new route:
@@ -6878,23 +7066,31 @@ flowchart TD
     C --> D{Pathname in<br/>Routes?}
     
     D -->|Yes: '/hello'| E[Retrieve Handler<br/>handleHello]
+    D -->|Yes: '/health'| E2[Retrieve Handler<br/>handleHealthRequest]
     D -->|No| F[No Handler<br/>Found]
     
     E --> G{HTTP Method<br/>Valid?}
     G -->|GET| H[Execute Handler<br/>Generate Response]
     G -->|Other| I[Invoke handle405<br/>Method Not Allowed]
     
-    F --> J[Invoke handle404<br/>Not Found]
+    E2 --> G2{HTTP Method<br/>Valid?}
+    G2 -->|GET| H2[Execute Handler<br/>Generate JSON Response]
+    G2 -->|Other| I
+    
+    F --> J[Invoke handleNotFound<br/>Not Found]
     
     H --> K[Response: 200<br/>Hello world]
+    H2 --> K2[Response: 200<br/>application/json status up]
     I --> L[Response: 405<br/>Allow: GET]
     J --> M[Response: 404<br/>Not Found]
     
     K --> N[res.end Called]
+    K2 --> N
     L --> N
     M --> N
     
     style K fill:#ccffcc
+    style K2 fill:#ccffcc
     style L fill:#ffffcc
     style M fill:#ffcccc
 ```
@@ -6912,20 +7108,22 @@ flowchart TD
 
 **Key Interfaces**:
 ```
-function handleHello(req: IncomingMessage, res: ServerResponse)
+function handleHelloRequest(req: IncomingMessage, res: ServerResponse)
 Returns: void
 Accepted Methods: GET
 Response: 200 OK, Content-Type: text/plain, Body: "Hello world"
-Error Cases: 405 Method Not Allowed for non-GET requests
+Error Cases: 405 Method Not Allowed (via handle405(res)) for non-GET requests
 ```
+
+The module exports `{ handleHelloRequest }`; `server.js` imports it under the alias `handleHello`.
 
 **Implementation Details**:
 
 The handler implements a two-step process:
 
 **Step 1: Method Validation**
-- Check if `req.method === 'GET'`
-- If false, invoke `handle405(req, res, ['GET'])` to send Method Not Allowed response
+- Check if `req.method === 'GET'` (via `isGetMethod`)
+- If false, log the unsupported method at error level and invoke `handle405(res)` to send the Method Not Allowed response
 
 **Step 2: Response Generation**
 - Set status: `res.statusCode = 200`
@@ -6933,6 +7131,47 @@ The handler implements a two-step process:
 - Write body: `res.end('Hello world')`
 
 **Security Considerations**: The handler generates static responses with no user input processing, eliminating injection attack vectors. The Content-Type header is explicitly set to `text/plain` to prevent browser interpretation as HTML or JavaScript.
+
+## healthHandler.js - Health Endpoint Handler
+
+**Purpose**: Implements the `/health` liveness endpoint, reporting that the server process is running and serving
+
+**Responsibilities**:
+1. HTTP method validation (GET only)
+2. JSON liveness response generation
+3. Delegation of unsupported methods to the shared 405 handler
+
+**Key Interfaces**:
+```
+function handleHealthRequest(req: IncomingMessage, res: ServerResponse)
+Returns: void
+Accepted Methods: GET
+Response: 200 OK, Content-Type: application/json, Body: {"status":"up"}
+Error Cases: 405 Method Not Allowed (via handle405(res)) for non-GET requests
+```
+
+The module exports `{ handleHealthRequest }`; `server.js` imports it and registers it under `'/health'` in `createRoutes()`.
+
+**Implementation Details**:
+
+**Step 1: Entry Logging**
+- `logger.info` records "Handling {method} request to /health endpoint"
+
+**Step 2: GET Response**
+- Set status: `res.statusCode = HTTP_STATUS.OK`
+- Set header: `res.setHeader(HEADERS.CONTENT_TYPE, HEADERS.CONTENT_TYPE_JSON)`
+- Write body: `res.end(JSON.stringify({ status: MESSAGES.HEALTH_STATUS_UP }))`
+- `logger.info` records the success message: Successfully responded with 200 OK and health status "up"
+
+**Step 3: Unsupported Methods**
+- `logger.error` records "Received unsupported {method} method, expected GET"
+- `handle405(res)` writes the 405 response; the handler writes nothing itself
+
+**Error Behavior**: The handler has no try/catch. An exception thrown while writing the response (for example by `setHeader`) propagates out of the handler to the middleware 500 path (Section 4.5.2.3).
+
+**Health Semantics**: Pure liveness check. The handler performs no dependency checks and reports no uptime, version, or host data.
+
+**Security Considerations**: The body is static, built from a constant, and incorporates no user input; the query string is ignored. Security headers are applied by the middleware before the handler runs.
 
 ## errorHandler.js - Centralized Error Handling
 
@@ -6965,13 +7204,13 @@ Response: 404 status, Content-Type: text/plain, Body: "Not Found"
 Logging: Logs requested path for monitoring
 ```
 
-**handle405(req, res, allowedMethods) - Method Not Allowed**:
+**handle405(res) - Method Not Allowed**:
 ```
-function handle405(req, res, allowedMethods: string[])
+function handle405(res)
 Purpose: Responds to requests with unsupported HTTP methods
-Response: 405 status, Allow header with supported methods
+Response: 405 status, Content-Type: text/plain, Allow: GET
 Body: "Method Not Allowed"
-Example: Allow: GET for /hello endpoint
+Callers: helloHandler.js and healthHandler.js (Allow: GET for /hello and /health)
 ```
 
 **Error Handling Safety**:
@@ -6984,26 +7223,50 @@ sequenceDiagram
     participant Client
     participant Router
     participant Hello as helloHandler
+    participant Health as healthHandler
     participant Error as errorHandler
     participant Response
     
     rect rgb(200, 255, 200)
-        Note over Client,Response: Successful GET Request Flow
+        Note over Client,Response: Successful GET /hello Flow
         Client->>Router: GET /hello
         Router->>Hello: handleHello(req, res)
         Hello->>Hello: Validate Method = GET
         Hello->>Response: Set Status 200
-        Hello->>Response: Set Header Content-Type
+        Hello->>Response: Set Header Content-Type text/plain
         Hello->>Response: Write "Hello world"
         Response->>Client: 200 OK
     end
     
+    rect rgb(200, 255, 200)
+        Note over Client,Response: Successful GET /health Flow
+        Client->>Router: GET /health
+        Router->>Health: handleHealthRequest(req, res)
+        Health->>Health: Validate Method = GET
+        Health->>Response: Set Status 200
+        Health->>Response: Set Header Content-Type application/json
+        Health->>Response: Write {"status":"up"}
+        Response->>Client: 200 OK
+    end
+    
     rect rgb(255, 255, 200)
-        Note over Client,Response: Invalid Method Flow
+        Note over Client,Response: Invalid Method Flow (/hello)
         Client->>Router: POST /hello
         Router->>Hello: handleHello(req, res)
         Hello->>Hello: Validate Method ≠ GET
-        Hello->>Error: handle405(req, res, ['GET'])
+        Hello->>Error: handle405(res)
+        Error->>Response: Set Status 405
+        Error->>Response: Set Header Allow: GET
+        Error->>Response: Write "Method Not Allowed"
+        Response->>Client: 405 Method Not Allowed
+    end
+    
+    rect rgb(255, 255, 200)
+        Note over Client,Response: Invalid Method Flow (/health)
+        Client->>Router: POST /health
+        Router->>Health: handleHealthRequest(req, res)
+        Health->>Health: Validate Method ≠ GET, logger.error
+        Health->>Error: handle405(res)
         Error->>Response: Set Status 405
         Error->>Response: Set Header Allow: GET
         Error->>Response: Write "Method Not Allowed"
@@ -7160,27 +7423,28 @@ flowchart LR
 
 1. **HTTP_STATUS**: HTTP status codes used throughout application
    ```
-   { OK: 200, NOT_FOUND: 404, METHOD_NOT_ALLOWED: 405, SERVER_ERROR: 500 }
+   { OK: 200, NOT_FOUND: 404, METHOD_NOT_ALLOWED: 405, INTERNAL_SERVER_ERROR: 500 }
    ```
 
 2. **ROUTES**: Path constants for route registration
    ```
    { HELLO: '/hello' }
    ```
+   `ROUTES` still defines only `HELLO`; `server.js` registers `'/hello'` and `'/health'` as literal keys in `createRoutes()`.
 
 3. **CONFIG**: Configuration defaults
    ```
-   { DEFAULT_PORT: 3000, DEFAULT_HOST: '0.0.0.0' }
+   { DEFAULT_PORT: 3000, ENV_VAR_PORT: 'PORT' }
    ```
 
 4. **MESSAGES**: Standard response messages
    ```
-   { HELLO: 'Hello world', NOT_FOUND: 'Not Found', METHOD_NOT_ALLOWED: 'Method Not Allowed', SERVER_ERROR: 'Internal Server Error' }
+   { HELLO_RESPONSE: 'Hello world', HEALTH_STATUS_UP: 'up', NOT_FOUND: 'Not Found', METHOD_NOT_ALLOWED: 'Method Not Allowed', SERVER_ERROR: 'Internal Server Error', SERVER_STARTED: 'Server started on port %d' }
    ```
 
-5. **HEADERS**: HTTP header names
+5. **HEADERS**: HTTP header names and content-type values
    ```
-   { CONTENT_TYPE: 'Content-Type', ALLOW: 'Allow' }
+   { CONTENT_TYPE: 'Content-Type', CONTENT_TYPE_TEXT: 'text/plain', CONTENT_TYPE_JSON: 'application/json', ALLOW: 'Allow' }
    ```
 
 6. **HTTP_METHODS**: Supported HTTP methods
@@ -7642,7 +7906,7 @@ graph TD
 - `hello-world-app`: 5-second interval for application metrics
 - `hello-world-health`: 30-second interval for health checks
 
-**Implementation Gap**: `/metrics` and `/health` endpoints not yet implemented (requires `prom-client` library integration).
+**Implementation Gap**: The `/metrics` endpoint and `prom-client` library integration are still missing. The `/health` endpoint is implemented, but its JSON body (`{"status":"up"}`) is not Prometheus exposition format, so the `hello-world-health` job records `up=0`.
 
 **Evidence**: `prometheus.yml` lines 14-47 configure scrape jobs; Tech Spec 3.7.4.1 documents pull-based model; Grafana dashboard references Prometheus datasource.
 
@@ -7783,11 +8047,12 @@ Prometheus is configured with two scrape jobs:
 - **Application Metrics**: 5-second interval, 3-second timeout, endpoint `/metrics`
 - **Health Monitoring**: 30-second interval, 5-second timeout, endpoint `/health`
 
-**Implementation Gap**: The application does not currently expose `/metrics` or `/health` endpoints. Full observability requires:
+**Implementation Gap**: The application does not expose `/metrics`. Full observability requires:
 1. Install `prom-client` library: `npm install prom-client`
 2. Create metrics registry and collectors
 3. Implement `/metrics` endpoint returning Prometheus format
-4. Implement `/health` endpoint returning 200 OK when healthy
+
+The `/health` endpoint exists and returns `200 OK` with `application/json` `{"status":"up"}`, but Prometheus cannot use it until the endpoint emits exposition format or the `hello-world-health` job is replaced by a blackbox-style HTTP probe.
 
 **Evidence**: `infrastructure/monitoring/prometheus.yml` complete scrape config; `grafana-dashboard.json` with 13 panels; Tech Spec 3.7.4 documents monitoring architecture.
 
@@ -7798,6 +8063,7 @@ Prometheus is configured with two scrape jobs:
 - ✅ Request timing instrumentation active
 - ✅ Prometheus infrastructure provisioned
 - ✅ Grafana dashboard configured
+- ✅ JSON liveness endpoint `GET /health` implemented (not scrapeable as Prometheus metrics)
 - ❌ Metrics endpoint not implemented
 - ❌ No distributed tracing (Jaeger/Zipkin)
 - ❌ No structured JSON logging
@@ -7822,8 +8088,8 @@ Prometheus is configured with two scrape jobs:
 - **Example**: `GET /api/users` → `404 Not Found`
 
 **405 Method Not Allowed** - Invalid HTTP methods:
-- **Trigger**: Non-GET request to `/hello` endpoint
-- **Handler**: `handle405(req, res, allowedMethods)` in `errorHandler.js`
+- **Trigger**: Non-GET request to the `/hello` or `/health` endpoint
+- **Handler**: `handle405(res)` in `errorHandler.js`, called by both endpoint handlers
 - **Response**: 405 status, Allow: GET header, Body: "Method Not Allowed"
 - **Logging**: Logs method and path: `405 Method Not Allowed: {method} {path}`
 - **Example**: `POST /hello` → `405 Method Not Allowed` with `Allow: GET` header
@@ -8007,8 +8273,9 @@ Minimal package set reduces attack surface:
 
 **Current Implementation**: None
 
-**Rationale**: The service exposes a single public endpoint with no sensitive data or state-changing operations:
+**Rationale**: The service exposes two public, read-only endpoints with no sensitive data or state-changing operations:
 - `/hello` endpoint is public information
+- `/health` discloses only `{"status":"up"}`: no version, uptime, host, or dependency data
 - No user accounts or identity
 - No protected resources
 - No access control requirements
@@ -8052,7 +8319,7 @@ Minimal package set reduces attack surface:
 | Dependency Management | ✅ Minimal | Only dotenv, reduced attack surface |
 | Container Security | ✅ Alpine Base | Minimal packages, smaller attack surface |
 | Input Validation | ⚠️ Not Needed Currently | No user input processed |
-| Authentication | ⚠️ Not Needed Currently | Public endpoint only |
+| Authentication | ⚠️ Not Needed Currently | Public read-only endpoints only (`/hello`, `/health`) |
 | Rate Limiting | ❌ Not Implemented | Service unprotected from abuse |
 | HTTPS/TLS | ❌ Not Implemented | Expected at load balancer |
 | Security Scanning | ❌ Not Implemented | No automated vulnerability detection |
@@ -8167,9 +8434,11 @@ resources:
 
 #### Health Check Mechanisms
 
+The application serves a dedicated liveness endpoint, `GET /health` (`src/backend/handlers/healthHandler.js`), which returns `200 OK` with `application/json` `{"status":"up"}`. The mechanisms below determine which path each probe uses.
+
 **1. Docker Container Health Check**:
 
-Configured in `docker-compose.yml` to monitor container health:
+Configured in `docker-compose.yml` to monitor container health. It still probes `/hello`, not `/health`:
 
 ```yaml
 healthcheck:
@@ -8196,10 +8465,11 @@ Configured in `prometheus.yml` as separate scrape job:
 
 ```yaml
 - job_name: 'hello-world-health'
+  static_configs:
+    - targets: ['hello-world-app:3000']
+  metrics_path: '/health'
   scrape_interval: 30s
   scrape_timeout: 5s
-  static_configs:
-    - targets: ['hello-world-app:3000/health']
 ```
 
 **Prometheus Health Metrics**:
@@ -8207,7 +8477,7 @@ Configured in `prometheus.yml` as separate scrape job:
 - Used for alerting and dashboard health indicators
 - Separate from application metrics (different scrape frequency)
 
-**Implementation Status**: `/health` endpoint not implemented. Prometheus scrape target configured but requires endpoint implementation.
+**Implementation Status**: The `/health` endpoint is implemented and answers `200 OK` with `application/json` `{"status":"up"}`. That body is not Prometheus exposition format, so the scrape fails to parse and `up{job="hello-world-health"}` stays 0 even while the service is running.
 
 **3. Bash Health Check Script**:
 
@@ -8240,13 +8510,15 @@ Docker Compose `restart: unless-stopped` policy:
 
 **Production Restart Policies** (Kubernetes/ECS):
 
+The examples below use `/health` as the dedicated liveness path. The provided Docker Compose healthcheck still uses `/hello`.
+
 ```yaml
 # Kubernetes
 
 restartPolicy: Always
 livenessProbe:
   httpGet:
-    path: /hello
+    path: /health
     port: 3000
   periodSeconds: 30
   failureThreshold: 3
@@ -8254,7 +8526,7 @@ livenessProbe:
 #### ECS
 
 healthCheck:
-  command: ["CMD-SHELL", "curl -f http://localhost:3000/hello || exit 1"]
+  command: ["CMD-SHELL", "curl -f http://localhost:3000/health || exit 1"]
   interval: 30
   timeout: 10
   retries: 3
@@ -8309,8 +8581,8 @@ sequenceDiagram
     rect rgb(230, 240, 255)
         Note over Prometheus,App: Prometheus Health Scrape
         Prometheus->>App: GET /health
-        App->>Prometheus: (Not Implemented)
-        Prometheus->>Prometheus: up{} = 0 (down)
+        App->>Prometheus: 200 OK application/json {"status":"up"}
+        Prometheus->>Prometheus: Parse failure, up{} = 0
     end
     
     rect rgb(255, 245, 230)
@@ -8475,13 +8747,19 @@ The stateless architecture provides inherent resilience:
 
 **Core Application Files**:
 - `src/backend/index.js` - Application bootstrap, lifecycle management, graceful shutdown signal handlers
-- `src/backend/server.js` - HTTP server implementation, middleware pipeline orchestration, promise-based lifecycle
+- `src/backend/server.js` - HTTP server implementation, middleware pipeline orchestration, promise-based lifecycle, `createRoutes()` mapping `/hello` and `/health`
 - `src/backend/config.js` - Configuration management, dotenv loading, port validation, environment flag computation
 - `src/backend/handlers/helloHandler.js` - GET /hello endpoint handler, method validation, response generation
+- `src/backend/handlers/healthHandler.js` - GET /health liveness handler, method validation, JSON `{"status":"up"}` response
+- `src/backend/handlers/error.js` - 404 (`handleNotFound`) and 500 (`handleServerError`) response handlers
 - `src/backend/errorHandler.js` - Centralized error handlers (404, 405, 500, EADDRINUSE detection)
 - `src/backend/middleware/index.js` - Request logger, security headers, error middleware, middleware composition
-- `src/backend/utils/constants.js` - Application constants (HTTP_STATUS, ROUTES, MESSAGES, HEADERS, HTTP_METHODS)
+- `src/backend/utils/constants.js` - Application constants (HTTP_STATUS, ROUTES, MESSAGES, HEADERS, HTTP_METHODS), including `MESSAGES.HEALTH_STATUS_UP` and `HEADERS.CONTENT_TYPE_JSON`
 - `src/backend/utils/logger.js` - Centralized logging utility with timestamp formatting and test suppression
+
+**Test Files**:
+- `src/backend/__tests__/handlers/healthHandler.test.js` - Health handler unit tests
+- `src/backend/__tests__/integration/health.test.js` - Live-pipeline `/health` integration tests
 
 **Infrastructure Files**:
 - `Dockerfile` - Production Docker image with node:18-alpine, layer caching optimization, production dependencies
@@ -8497,7 +8775,7 @@ The stateless architecture provides inherent resilience:
 
 **Source Code Structure**:
 - `src/backend/` - Main application backend service implementation
-- `src/backend/handlers/` - HTTP request handlers (hello, error handlers)
+- `src/backend/handlers/` - HTTP request handlers (`helloHandler.js`, `healthHandler.js`, `error.js`)
 - `src/backend/middleware/` - Request lifecycle middleware (logging, security, error handling)
 - `src/backend/utils/` - Utility modules (constants, logger)
 
@@ -8592,7 +8870,7 @@ The single-process architecture eliminates entire categories of operational conc
 The monolithic architecture fully satisfies all documented requirements without introducing unnecessary complexity:
 
 **Request Processing**  
-The system's single-endpoint design (`/hello`) requires only path-based routing within a single server process. Section 4.2 documents the complete request workflow from client connection through response generation, all occurring within a single process boundary without network hops or service-to-service calls.
+The system's two fixed routes (`/hello` and `/health`) require only path-based routing within a single server process. Section 4.2 documents the complete request workflow from client connection through response generation, all occurring within a single process boundary without network hops or service-to-service calls.
 
 **Scalability**  
 Section 5.1.1 notes the "stateless nature of the service—with no session management, persistent storage, or shared state—enables trivial horizontal scaling when needed." While not currently implemented, the architecture supports horizontal scaling through standard container orchestration without requiring microservices decomposition. For the educational scope defined in Section 1.2.3, a single instance provides sufficient capacity.
@@ -8626,7 +8904,7 @@ Rather than service boundaries, the system organizes code into layered component
 - **Server Layer** (`server.js`): HTTP server creation and request pipeline orchestration  
 - **Middleware Layer** (`middleware/`): Cross-cutting request processing (logging, security headers)
 - **Routing Layer** (integrated in `server.js`): Path-based request dispatching to handlers
-- **Handler Layer** (`handlers/`): Business logic for specific endpoints (`/hello`)
+- **Handler Layer** (`handlers/`): Business logic for specific endpoints (`/hello` and `/health`)
 - **Support Layer** (`utils/`): Configuration, logging, constants, error handling
 
 These layers communicate through direct function calls and shared memory within a single process, not through network protocols or message passing between services.
@@ -8638,7 +8916,7 @@ Section 4.2 documents the complete request workflow as a linear pipeline within 
 1. **Connection Establishment**: Node.js runtime invokes the `handleRequest` function when HTTP requests arrive
 2. **Middleware Pipeline**: Request enters logging and security header middleware in `middleware/index.js`
 3. **Routing**: URL parsing and handler selection in `server.js` using native `url.parse()`
-4. **Handler Execution**: Business logic in `handlers/helloHandler.js` generates response
+4. **Handler Execution**: Business logic in `handlers/helloHandler.js` (`/hello`) or `handlers/healthHandler.js` (`/health`) generates the response
 5. **Response Completion**: Logging middleware captures timing and writes to stdout
 
 This entire flow occurs synchronously within microseconds in a single process, without service-to-service network calls, message queue operations, or distributed transactions.
@@ -8702,7 +8980,7 @@ The single-process architecture eliminates the need for distributed resilience m
 
 **Fallback Mechanisms**: No degraded functionality or alternative service paths when dependencies are unavailable. The server either successfully processes requests or returns appropriate error status codes.
 
-**Distributed Tracing**: No trace propagation (Jaeger, Zipkin, OpenTelemetry) across service boundaries. Request logging in `middleware/requestLogger.js` captures complete request lifecycle within the single process.
+**Distributed Tracing**: No trace propagation (Jaeger, Zipkin, OpenTelemetry) across service boundaries. The `requestLogger` middleware in `middleware/index.js` captures the complete request lifecycle within the single process.
 
 **Rate Limiting and Throttling**: No rate limiting middleware or distributed rate limiting (using Redis) to prevent service overload from other services.
 
@@ -8817,6 +9095,7 @@ src/backend/
 ├── errorHandler.js
 ├── handlers/
 │   ├── helloHandler.js
+│   ├── healthHandler.js
 │   ├── error.js
 └── utils/
     ├── constants.js
@@ -8886,7 +9165,7 @@ At no point in this workflow does the system:
 - Store session state or user data
 - Perform any I/O operations to persistent storage
 
-The `/hello` endpoint handler, documented in Section 5.2, generates responses using the constant `MESSAGES.HELLO_RESPONSE = 'Hello world'` defined in `src/backend/utils/constants.js`. This constant is loaded into memory at application startup and requires no database lookup or external data retrieval.
+The `/hello` endpoint handler, documented in Section 5.2, generates responses using the constant `MESSAGES.HELLO_RESPONSE = 'Hello world'` defined in `src/backend/utils/constants.js`. This constant is loaded into memory at application startup and requires no database lookup or external data retrieval. The `/health` endpoint handler likewise reads `MESSAGES.HEALTH_STATUS_UP = 'up'` from memory and builds its `{"status":"up"}` body with `JSON.stringify` on each request, with no persistence or I/O.
 
 ### 6.2.3 Architectural Rationale for Stateless Design
 
@@ -8948,15 +9227,16 @@ HTTP Status Codes:
 
 Response Messages:
 - MESSAGES.HELLO_RESPONSE = 'Hello world'
+- MESSAGES.HEALTH_STATUS_UP = 'up'
 - MESSAGES.NOT_FOUND = 'Not Found'
 - MESSAGES.METHOD_NOT_ALLOWED = 'Method Not Allowed'
 
 Content Types:
-- CONTENT_TYPES.TEXT_PLAIN = 'text/plain'
-- CONTENT_TYPES.JSON = 'application/json'
+- HEADERS.CONTENT_TYPE_TEXT = 'text/plain'
+- HEADERS.CONTENT_TYPE_JSON = 'application/json'
 ```
 
-These constants are loaded into Node.js process memory at application startup and remain immutable throughout the application lifecycle. The `/hello` endpoint handler retrieves `MESSAGES.HELLO_RESPONSE` through a synchronous in-memory reference without I/O operations, network calls, or latency.
+These constants are loaded into Node.js process memory at application startup and remain immutable throughout the application lifecycle. The `/hello` endpoint handler retrieves `MESSAGES.HELLO_RESPONSE` through a synchronous in-memory reference without I/O operations, network calls, or latency. The `/health` endpoint handler reads `MESSAGES.HEALTH_STATUS_UP` the same way and builds its JSON body per request, with no persistence or I/O.
 
 **Design Characteristics**:
 - **Immutability**: Constants never change during runtime, eliminating consistency concerns
@@ -9093,7 +9373,7 @@ However, any database integration would fundamentally alter the project's educat
 
 **Source Code Structure**:
 - `src/backend/` - Complete backend implementation directory with no database-related folders (no `/models`, `/repositories`, `/migrations`, `/schemas`)
-- `src/backend/handlers/` - Request handlers directory containing only HTTP response handlers (404, 405, 500, `/hello`)
+- `src/backend/handlers/` - Request handlers directory containing only HTTP response handlers (404, 405, 500, `/hello`, `/health`)
 - `src/backend/utils/` - Utility modules directory with constants and logging, no database utilities
 
 **Comprehensive Folder Exploration** (9 folders examined):
@@ -9149,13 +9429,14 @@ This positioning enables the system to demonstrate production-ready operational 
 
 #### 6.3.2.1 REST Endpoint Specification
 
-The Node.js Hello World Service exposes a **single REST endpoint** implementing the GET HTTP method, as defined in `src/backend/handlers/helloHandler.js`. This minimal API surface demonstrates RESTful principles without introducing complexity.
+The Node.js Hello World Service exposes **two REST endpoints** implementing the GET HTTP method, defined in `src/backend/handlers/helloHandler.js` and `src/backend/handlers/healthHandler.js`. This minimal API surface demonstrates RESTful principles without introducing complexity.
 
-**Primary API Endpoint:**
+**API Endpoints:**
 
 | Endpoint | Method | Description | Content-Type | Response Body |
-|---|---|---|---|
+|---|---|---|---|---|
 | `/hello` | GET | Returns greeting message | text/plain | "Hello world" |
+| `/health` | GET | Liveness check | application/json | `{"status":"up"}` |
 
 **HTTP Status Code Implementation:**
 
@@ -9163,9 +9444,9 @@ The system implements four HTTP status codes defined in `src/backend/utils/const
 
 | Status Code | Scenario | Handler | Response Message |
 |---|---|---|---|
-| 200 OK | Successful GET to /hello | `helloHandler.js` | "Hello world" |
+| 200 OK | Successful GET to /hello or /health | `helloHandler.js`, `healthHandler.js` | "Hello world" or `{"status":"up"}` |
 | 404 Not Found | Request to unknown path | `errorHandler.js` (handle404) | "Not Found" |
-| 405 Method Not Allowed | Non-GET method to /hello | `errorHandler.js` (handle405) | "Method Not Allowed" |
+| 405 Method Not Allowed | Non-GET method to /hello or /health | `errorHandler.js` (handle405) | "Method Not Allowed" |
 | 500 Internal Server Error | Server-side error | `errorHandler.js` (handleServerError) | "Internal Server Error" |
 
 **Implementation Evidence:**
@@ -9184,7 +9465,21 @@ function handleHelloRequest(req, res) {
 }
 ```
 
-For requests using unsupported HTTP methods (POST, PUT, DELETE, PATCH, etc.), the handler returns 405 Method Not Allowed with an `Allow: GET` header indicating the supported method, as documented in Section 5.1.3.
+The health endpoint handler in `src/backend/handlers/healthHandler.js` follows the same pattern with a JSON body:
+
+```javascript
+function handleHealthRequest(req, res) {
+  if (req.method === HTTP_METHODS.GET) {
+    res.statusCode = HTTP_STATUS.OK;  // 200
+    res.setHeader(HEADERS.CONTENT_TYPE, HEADERS.CONTENT_TYPE_JSON);
+    res.end(JSON.stringify({ status: MESSAGES.HEALTH_STATUS_UP }));  // {"status":"up"}
+  } else {
+    handle405(res);  // Method Not Allowed
+  }
+}
+```
+
+For requests using unsupported HTTP methods (POST, PUT, DELETE, PATCH, etc.) on either endpoint, the handler returns 405 Method Not Allowed with an `Allow: GET` header indicating the supported method, as documented in Section 5.1.3.
 
 #### 6.3.2.2 Request Processing Pipeline
 
@@ -9194,7 +9489,7 @@ The system implements a **synchronous middleware pipeline** that processes every
 
 1. **Request Logger Middleware** (`requestLogger`): Captures request start time, wraps `res.end()` to calculate response time, logs request method, URL, status code, and elapsed time
 2. **Security Headers Middleware** (`securityHeaders`): Injects HTTP security headers into all responses
-3. **Router**: URL path parsing using native `url.parse()`, route matching against handler mappings
+3. **Router**: URL path parsing using native `url.parse()`, exact route matching against the handler mappings for `/hello` and `/health`
 4. **Handler**: Endpoint-specific business logic execution
 5. **Error Handler**: Catches synchronous errors and generates appropriate error responses
 
@@ -9225,6 +9520,8 @@ sequenceDiagram
     Logger->>Logger: Log: GET /hello 200 5ms
     HTTPServer->>Client: HTTP 200 "Hello world"
 ```
+
+A `GET /health` request follows the same sequence: the router dispatches to `handleHealthRequest()` in `healthHandler.js`, which ends the response with `{"status":"up"}` and `Content-Type: application/json`.
 
 This synchronous processing model ensures that the complete request lifecycle—from connection establishment to response completion—occurs within a single Node.js event loop iteration, as explained in Section 5.1.1's description of the "single-process, single-threaded HTTP server."
 
@@ -9268,13 +9565,13 @@ As noted in Section 5.1.1, the "stateless nature of the service—with no sessio
 
 **Single-Version API:**
 
-The system exposes a single endpoint (`/hello`) without versioning prefixes (no `/v1/hello` or `/api/v1/hello` patterns). This design decision reflects several factors:
+The system exposes two unversioned endpoints (`/hello` and `/health`) without versioning prefixes (no `/v1/hello` or `/api/v1/health` patterns). This design decision reflects several factors:
 
-- **Stable Endpoint Contract**: The `/hello` endpoint returns a fixed response ("Hello world") with no evolving schema or breaking changes
+- **Stable Endpoint Contracts**: `/hello` returns a fixed response ("Hello world") and `/health` returns a fixed `{"status":"up"}`, with no evolving schema or breaking changes
 - **Educational Simplicity**: API versioning strategies (URL-based, header-based, content negotiation) add complexity without demonstrating fundamental concepts
 - **No Backward Compatibility Requirements**: As a new educational project with no production consumers, version migration concerns do not apply
 
-For systems requiring API evolution, versioning would typically be implemented through URL path prefixes (`/v1/`, `/v2/`) or Accept header content negotiation (`application/vnd.api+json;version=1`), but these patterns are unnecessary for this single-endpoint system.
+For systems requiring API evolution, versioning would typically be implemented through URL path prefixes (`/v1/`, `/v2/`) or Accept header content negotiation (`application/vnd.api+json;version=1`), but these patterns are unnecessary for this two-endpoint system.
 
 ### 6.3.3 Message Processing Architecture
 
@@ -9347,8 +9644,8 @@ The Prometheus configuration defines three distinct scrape jobs with different i
 | Scrape Job | Target Endpoint | Interval | Timeout | Purpose |
 |---|---|---|---|
 | prometheus | localhost:9090 | 15s | 10s | Prometheus self-monitoring |
-| hello-world-app | hello-world-app:3000/metrics | 5s | 10s | Application metrics collection |
-| hello-world-health | hello-world-app:3000/health | 30s | 10s | Health status monitoring |
+| hello-world-app | hello-world-app:3000/metrics | 5s | 3s | Application metrics collection |
+| hello-world-health | hello-world-app:3000/health | 30s | 5s | Health status monitoring |
 
 **Scrape Job Details from `prometheus.yml`:**
 
@@ -9389,8 +9686,8 @@ sequenceDiagram
     
     Note over Prom: Every 30 seconds
     Prom->>App: HTTP GET /health
-    App->>Prom: Health check response
-    Prom->>DB: Store availability metric
+    App->>Prom: 200 application/json {"status":"up"}
+    Prom->>DB: Scrape parse fails, store up=0
     
     Note over Graf: User requests dashboard
     Graf->>Prom: PromQL query
@@ -9412,7 +9709,7 @@ The system includes a pre-configured Grafana dashboard (`infrastructure/monitori
 
 **Implementation Status Note:**
 
-As documented in Section 5.1.1, "the monitoring infrastructure (Prometheus configuration, Grafana dashboard with 13 panels) is fully provisioned in `infrastructure/monitoring/`, but the application does not currently expose `/metrics` or `/health` endpoints." Full observability functionality requires implementing metrics instrumentation using the `prom-client` library to expose the Prometheus exposition format.
+The monitoring infrastructure (Prometheus configuration, Grafana dashboard with 13 panels) is fully provisioned in `infrastructure/monitoring/`, but the application does not expose a `/metrics` endpoint. The `/health` endpoint exists and returns JSON (`{"status":"up"}`), which the `hello-world-health` scrape cannot ingest as Prometheus exposition format, so `up{job="hello-world-health"}` stays 0. Full observability functionality requires implementing metrics instrumentation using the `prom-client` library to expose the Prometheus exposition format.
 
 #### 6.3.4.2 Container Orchestration Integration
 
@@ -9521,7 +9818,7 @@ graph TB
 
 **Health Check Endpoint Contract:**
 
-The system's health check integration uses the `/hello` endpoint as a **dual-purpose functional and health check endpoint**, as documented in Section 5.1.1. This design leverages the single-endpoint architecture to verify both application availability and correct response generation.
+The `/hello` endpoint remains the target of the Docker Compose healthcheck and `infrastructure/scripts/health-check.sh`, which verify both application availability and correct response generation. The dedicated `/health` liveness endpoint (`200 OK`, `application/json`, `{"status":"up"}`) exists, but no container or script probe uses it yet; its only consumer is the Prometheus `hello-world-health` scrape, which cannot parse the JSON body.
 
 **Health Check Script Implementation:**
 
@@ -9550,9 +9847,9 @@ fi
 
 | Integration Point | Interval | Timeout | Retries | Purpose |
 |---|---|---|---|---|
-| Docker Compose | 30s | 10s | 3 | Container orchestration health status |
-| Deployment Script | Variable | 5s | 10 | Post-deployment verification |
-| Prometheus | 30s | 10s | N/A | Availability monitoring |
+| Docker Compose | 30s | 10s | 3 | Container orchestration health status (probes `/hello`) |
+| Deployment Script | Variable | 5s | 10 | Post-deployment verification (probes `/hello`) |
+| Prometheus | 30s | 5s | N/A | Availability monitoring (scrapes `/health`; records `up=0` because the body is JSON) |
 
 **Health Check Verification Flow:**
 
@@ -9725,6 +10022,7 @@ graph TB
         App[Node.js Application<br/>Port 3000]
         AppServer[HTTP Server<br/>server.js]
         AppHandler[Hello Handler<br/>helloHandler.js]
+        AppHealth[Health Handler<br/>healthHandler.js]
         AppConfig[Configuration<br/>config.js]
     end
     
@@ -9752,12 +10050,15 @@ graph TB
     end
     
     Client -->|HTTP GET /hello| App
+    Client -->|HTTP GET /health| App
     App --> AppServer
     AppServer --> AppHandler
+    AppServer --> AppHealth
     AppHandler -->|"Hello world"| Client
+    AppHealth -->|"JSON status up"| Client
     
     Prom -->|Scrape /metrics<br/>Every 5s| App
-    Prom -->|Scrape /health<br/>Every 30s| App
+    Prom -->|Scrape /health<br/>Every 30s, JSON so up=0| App
     Prom --> PromDB
     Graf -->|PromQL Queries| Prom
     
@@ -9837,8 +10138,8 @@ The Prometheus metrics collection and Grafana visualization integration pattern:
 graph LR
 subgraph "Application"
     A["/hello Endpoint<br/>Business Logic"]
-    B["/metrics Endpoint<br/>Prometheus Format"]
-    C["/health Endpoint<br/>Availability Check"]
+    B["/metrics Endpoint<br/>Not Implemented"]
+    C["/health Endpoint<br/>JSON Liveness"]
 end
 
 subgraph "Prometheus"
@@ -9858,8 +10159,8 @@ B -->|Metrics Data| D
 D --> F
 
 E -->|HTTP GET| C
-C -->|Health Status| E
-E --> F
+C -->|"200 application/json, status up"| E
+E -->|"Parse fails, up=0"| F
 
 H --> I
 I -->|PromQL| G
@@ -9912,7 +10213,7 @@ flowchart TB
     
     subgraph "Monitoring Integration"
         I --> V[Prometheus Scrapes<br/>:3000/metrics]
-        I --> W[Prometheus Scrapes<br/>:3000/health]
+        I --> W[Prometheus Scrapes<br/>:3000/health<br/>JSON body, up=0]
         J --> X[Grafana Queries<br/>Prometheus API]
     end
     
@@ -9945,10 +10246,11 @@ flowchart TB
 - `infrastructure/scripts/deploy.sh` - Deployment automation orchestrating Docker build, Docker Compose deployment, and health verification
 - `src/backend/server.js` - HTTP server implementation with middleware pipeline, routing, and request handling
 - `src/backend/handlers/helloHandler.js` - Hello endpoint handler with method validation and response generation
+- `src/backend/handlers/healthHandler.js` - Health endpoint handler returning the `{"status":"up"}` JSON liveness response
 - `src/backend/middleware/index.js` - Middleware implementations for request logging, security headers, and error handling
 - `src/backend/utils/constants.js` - HTTP status codes, routes, headers, and messages definitions
 - `src/backend/config.js` - Environment variable loading, validation, and configuration management using dotenv
-- `src/backend/router.js` - URL routing logic with path normalization and handler dispatching
+- `src/backend/router.js` - URL routing logic with path normalization and handler dispatching (not imported by `server.js`)
 - `Dockerfile` - Production container build configuration with Alpine Linux base image
 
 #### Architecture Validation
@@ -9971,7 +10273,7 @@ The Node.js Hello World Service implements a **deliberately minimal security arc
 
 **Applicability Statement:**
 
-Traditional comprehensive security architecture—encompassing authentication frameworks, authorization systems, API key management, and application-level encryption—is **not applicable to this educational system**. The service exposes a single public endpoint (`/hello`) with no sensitive data, no user accounts, no state-changing operations, and no protected resources, eliminating the need for identity management, access control, and data protection beyond basic HTTP security practices.
+Traditional comprehensive security architecture—encompassing authentication frameworks, authorization systems, API key management, and application-level encryption—is **not applicable to this educational system**. The service exposes two public, read-only, unauthenticated endpoints (`/hello` and `/health`) with no sensitive data, no user accounts, no state-changing operations, and no protected resources, eliminating the need for identity management, access control, and data protection beyond basic HTTP security practices. `/health` discloses only `{"status":"up"}`: no version, uptime, host, or dependency data.
 
 **What IS Implemented:**
 
@@ -9997,7 +10299,7 @@ The following table provides a comprehensive overview of the system's security p
 | **Container Security** | ✅ **Implemented** | Alpine Linux base and production-only dependencies |
 | **Error Handling Security** | ✅ **Implemented** | Generic error messages prevent information disclosure |
 | **Configuration Security** | ⚠️ **Basic Implementation** | Environment variables with validation but no secrets vault |
-| **Authentication** | ⚠️ **Not Applicable** | Public endpoint with no user identity requirements |
+| **Authentication** | ⚠️ **Not Applicable** | Public read-only endpoints with no user identity requirements |
 | **Authorization** | ⚠️ **Not Applicable** | No protected resources or access control requirements |
 | **TLS/HTTPS Encryption** | ⚠️ **Infrastructure Layer** | Expected at load balancer, not application termination |
 | **Rate Limiting** | ❌ **Not Implemented** | Expected at infrastructure layer for production deployments |
@@ -10083,10 +10385,12 @@ res.setHeader('Content-Security-Policy', "default-src 'none'");
 ```
 
 **Justification:**
-This ultra-strict policy is appropriate for a plain text API endpoint that:
-- Returns `Content-Type: text/plain` responses (no HTML rendering)
+This ultra-strict policy is appropriate for an API that:
+- Returns `Content-Type: text/plain` responses from `/hello` and every error path, and an `application/json` response from `/health` (no HTML rendering in either case)
 - Requires no JavaScript, CSS, images, or other web resources
 - Has no interactive web interface requiring resource loading
+
+`default-src 'none'` applies equally to the JSON liveness response; a machine-readable body needs no resource loading.
 
 If the system were to add an HTML-based web UI, the CSP would require relaxation to permit necessary resource loading (e.g., `default-src 'self'; script-src 'self'`).
 
@@ -10138,13 +10442,15 @@ sequenceDiagram
 3. **No Conditional Logic**: Same headers applied to all responses, eliminating configuration complexity
 4. **Performance Impact**: Negligible overhead (three string header assignments per request)
 
+**Test Verification:** `src/backend/__tests__/integration/health.test.js` asserts `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Content-Security-Policy: default-src 'none'` on `GET /health` 200 responses and on the 500 response produced when the health handler throws (the headers set before the throw are retained). The same suite also checks them on the `/health` 405 and `/health/` 404 responses.
+
 #### 6.4.2.3 Attack Surface Reduction Through Headers
 
 The security headers implementation contributes to attack surface reduction as documented in Section 5.4.3:
 
 | Vulnerability Class | Header Protection | Mitigation Status | Additional Factors |
 |---|---|---|---|
-| **XSS (Cross-Site Scripting)** | Content-Security-Policy | ✅ **Mitigated** | Plain text responses, no HTML rendering |
+| **XSS (Cross-Site Scripting)** | Content-Security-Policy | ✅ **Mitigated** | Plain text and static JSON responses, no HTML rendering |
 | **Clickjacking** | X-Frame-Options | ✅ **Mitigated** | iframe embedding blocked |
 | **MIME Type Confusion** | X-Content-Type-Options | ✅ **Mitigated** | Content type strictly enforced |
 | **Reflected XSS** | CSP + No User Input | ✅ **Not Applicable** | No user input processing |
@@ -10152,7 +10458,7 @@ The security headers implementation contributes to attack surface reduction as d
 
 **Defense-in-Depth Principle:**
 
-While the system's plain text responses and lack of user input make many attacks technically impossible, the security headers provide **defense-in-depth protection** against future changes. If developers add HTML responses or user input processing without understanding security implications, the headers provide a safety net.
+While the system's plain text and static JSON responses and lack of user input make many attacks technically impossible, the security headers provide **defense-in-depth protection** against future changes. If developers add HTML responses or user input processing without understanding security implications, the headers provide a safety net.
 
 ### 6.4.3 Authentication and Authorization Architecture
 
@@ -10171,9 +10477,9 @@ As documented in Section 6.3.2.4, the system implements **no authentication mech
 
 **Architectural Rationale:**
 
-The `/hello` endpoint serves as a **public information endpoint** with no access control requirements:
+The `/hello` and `/health` endpoints are **public, read-only, unauthenticated endpoints** with no access control requirements:
 
-1. **No Sensitive Data**: Response contains static string "Hello world" with no confidential information
+1. **No Sensitive Data**: `/hello` returns the static string "Hello world"; `/health` returns only `{"status":"up"}`, disclosing no version, uptime, host, or dependency data
 2. **No User Accounts**: System has no concept of users, identities, or principals
 3. **No Protected Resources**: All endpoints are equally accessible to all clients
 4. **No State Changes**: Read-only operations with no data modification capabilities
@@ -10182,7 +10488,7 @@ The `/hello` endpoint serves as a **public information endpoint** with no access
 **Evidence from Codebase:**
 
 - **Middleware Search**: No authentication middleware in `src/backend/middleware/index.js`
-- **Handler Search**: No credential validation in `src/backend/handlers/helloHandler.js`
+- **Handler Search**: No credential validation in `src/backend/handlers/helloHandler.js` or `src/backend/handlers/healthHandler.js`
 - **Dependency Search**: No authentication libraries in `package.json` (no passport, jsonwebtoken, bcrypt)
 - **Configuration Search**: No authentication-related environment variables in `src/backend/config.js`
 
@@ -10219,7 +10525,7 @@ Authorization requires differentiation between requestors, which presupposes aut
 **Evidence from Codebase:**
 
 - **Middleware Search**: No authorization middleware in `src/backend/middleware/index.js`
-- **Handler Search**: No permission checks in `src/backend/handlers/helloHandler.js`
+- **Handler Search**: No permission checks in `src/backend/handlers/helloHandler.js` or `src/backend/handlers/healthHandler.js`
 - **Route Definition**: No route-level authorization decorators or guards
 - **Configuration Search**: No authorization policies in configuration files
 
@@ -10250,7 +10556,7 @@ graph TB
         B1[HTTP Request<br/>Any Client] --> B2[Security Headers<br/>Middleware]
         B2 --> B3[Router]
         B3 --> B4[Handler<br/>No Identity Check]
-        B4 --> B5[Response<br/>Hello world]
+        B4 --> B5[Response<br/>Hello world or status up]
         
         style B1 fill:#ccffcc,stroke:#00cc00
         style B5 fill:#ccffcc,stroke:#00cc00
@@ -10418,7 +10724,7 @@ The system processes **no user input** and stores **no sensitive data** that wou
 
 The only "input" the system processes is the **URL path** from HTTP requests:
 - Parsed using Node.js `url.parse()` (safe, built-in function)
-- Matched against fixed route patterns (`/hello`)
+- Matched exactly against the fixed route patterns `/hello` and `/health`
 - Never executed, evaluated, or used in file system operations
 - No SQL, command injection, or path traversal risks
 
@@ -10426,18 +10732,19 @@ The only "input" the system processes is the **URL path** from HTTP requests:
 
 All responses are either:
 - **Static string literals**: "Hello world", "Not Found", "Method Not Allowed"
+- **Static JSON document**: `{"status":"up"}` from `/health`, built from a constant with no request input
 - **Generic error messages**: "Internal Server Error" (no details leaked)
-- **Plain text format**: `Content-Type: text/plain` (no HTML rendering, no XSS risk)
+- **Fixed content types**: `Content-Type: text/plain` for `/hello` and errors, `application/json` for `/health` (no HTML rendering, no XSS risk)
 
 **Logging Sanitization:**
 
-Request logs contain only non-sensitive data:
+Request logs contain the method, URL, status, and response time:
 ```
 GET /hello 200 5ms
 POST /admin/delete-user 404 2ms
 ```
 
-Even if clients send sensitive data in URLs (e.g., `GET /hello?password=secret123`), the logger only captures the path portion (`/hello`), not query parameters, providing inadvertent protection.
+The request logger records `req.url` as received, query string included (`__tests__/integration/health.test.js` verifies that `GET /health?probe=1` is logged as `/health?probe=1`). Sensitive data sent in URL query parameters (e.g., `GET /hello?password=secret123`) would therefore appear in the logs.
 
 ### 6.4.5 Container Security Architecture
 
@@ -11166,6 +11473,7 @@ graph TB
 subgraph "External Attack Surface"
     A1[HTTP Port 3000<br/>Public Exposure]
     A2["/hello Endpoint<br/>GET Only"]
+    A5["/health Endpoint<br/>GET Only"]
     A3[Unknown Path<br/>404 Response]
     A4[Invalid Method<br/>405 Response]
 end
@@ -11185,6 +11493,7 @@ subgraph "No Attack Surface (Not Implemented)"
 end
 
 A1 --> A2
+A1 --> A5
 A1 --> A3
 A1 --> A4
 
@@ -11201,12 +11510,14 @@ style C3 fill:#ccffcc
 style C4 fill:#ccffcc
 ```
 
+The `/health` endpoint adds no new input handling: it reads only the request method, ignores the query string, and returns the static `{"status":"up"}` document.
+
 **Attack Vector Assessment:**
 
 | Attack Vector | Exploitability | System Vulnerability | Mitigation |
 |---|---|---|---|
 | **SQL Injection** | ✅ **Not Applicable** | No database | N/A - No SQL queries |
-| **XSS (Cross-Site Scripting)** | ✅ **Mitigated** | Plain text responses, CSP header | Security headers + no HTML |
+| **XSS (Cross-Site Scripting)** | ✅ **Mitigated** | Plain text and static JSON responses, CSP header | Security headers + no HTML |
 | **CSRF (Cross-Site Request Forgery)** | ✅ **Not Applicable** | No state-changing operations | N/A - Read-only operations |
 | **Command Injection** | ✅ **Not Applicable** | No shell command execution | N/A - No system calls |
 | **Path Traversal** | ✅ **Not Applicable** | No file system access from input | N/A - Fixed route paths only |
@@ -11299,6 +11610,8 @@ style C4 fill:#ccffcc
 
 - `src/backend/middleware/index.js` - Security headers middleware implementation (lines 53-64), security header application to all responses
 - `src/backend/handlers/error.js` - Error handling security implementation (lines 15-77), information disclosure prevention
+- `src/backend/handlers/healthHandler.js` - Public `/health` liveness handler; no credential or permission checks, static `{"status":"up"}` body
+- `src/backend/__tests__/integration/health.test.js` - Verifies security headers on `/health` 200, 404, 405, and 500 responses
 - `src/backend/config.js` - Environment variable configuration management, validation, and dotenv integration
 - `Dockerfile` - Container security configuration with Alpine Linux base image (line 2) and production-only dependencies (line 12)
 - `infrastructure/local/docker-compose.yml` - Health check configuration (lines 25-30) and restart policy (line 24)
@@ -11342,13 +11655,14 @@ The Node.js Hello World Service implements a **hybrid monitoring approach** char
 | Capability | Status | Functionality Level | Evidence |
 |---|---|---|
 | Console Logging | ✅ Implemented | Fully functional with timestamps, log levels, request tracking | `src/backend/utils/logger.js` |
-| Health Checking | ✅ Implemented | Docker health checks, bash validation script | `infrastructure/local/docker-compose.yml`, `infrastructure/scripts/health-check.sh` |
-| Prometheus Configuration | ⚠️ Provisioned | Complete scrape job configurations without active endpoints | `infrastructure/monitoring/prometheus.yml` |
+| Health Checking | ✅ Implemented | Docker health checks, bash validation script (both probe `/hello`) | `infrastructure/local/docker-compose.yml`, `infrastructure/scripts/health-check.sh` |
+| Liveness Endpoint | ✅ Implemented | `GET /health` returns 200 `application/json` `{"status":"up"}` | `src/backend/handlers/healthHandler.js` |
+| Prometheus Configuration | ⚠️ Provisioned | Complete scrape job configurations without scrapeable endpoints | `infrastructure/monitoring/prometheus.yml` |
 | Grafana Dashboard | ⚠️ Provisioned | 13 pre-configured panels awaiting metrics data | `infrastructure/monitoring/grafana-dashboard.json` |
 
 | Capability | Status | Functionality Level | Evidence |
 |---|---|---|
-| Metrics Endpoints | ❌ Not Implemented | No `/metrics` or `/health` endpoints in application code | Search across `src/backend/` |
+| Metrics Endpoints | ❌ Not Implemented | No `/metrics` endpoint in application code | Search across `src/backend/` |
 | Metrics Collection | ❌ Not Implemented | No prom-client library or instrumentation | `package.json` dependencies |
 | Distributed Tracing | ❌ Not Applicable | Single-process architecture requires no distributed tracing | Section 6.1.1 |
 | Alerting Rules | ❌ Not Implemented | No Alertmanager configuration or alert definitions | `infrastructure/monitoring/prometheus.yml` |
@@ -11540,7 +11854,7 @@ The `infrastructure/scripts/health-check.sh` script provides programmatic health
 - **CI/CD Pipelines:** Health check gates prevent traffic routing to unhealthy deployments
 - **Smoke Testing:** Pre-production validation before releasing new versions
 
-#### 6.5.3.3 Planned Prometheus Health Scraping
+#### 6.5.3.3 Prometheus Health Scraping
 
 The `infrastructure/monitoring/prometheus.yml` file configures a dedicated health monitoring scrape job separate from application metrics collection:
 
@@ -11566,10 +11880,10 @@ The `infrastructure/monitoring/prometheus.yml` file configures a dedicated healt
 - **`scrape_duration_seconds`:** Time required to complete health check
 - **`scrape_samples_scraped`:** Number of samples collected from endpoint
 
-**Implementation Status:** ❌ **Not Implemented**
-The `/health` endpoint does not exist in the application code. Prometheus will report `up{job="hello-world-health"} 0` indicating down status until endpoint is implemented.
+**Implementation Status:** ⚠️ **Endpoint Implemented, Scrape Not Functional**
+The application implements `GET /health` (`src/backend/handlers/healthHandler.js`), which returns `200 OK` with `Content-Type: application/json` and `{"status":"up"}`. That body is not Prometheus exposition format, so the scrape fails and `up{job="hello-world-health"}` stays 0 until the job becomes a blackbox-style HTTP probe or the endpoint emits exposition format.
 
-**Workaround:** Docker health checks currently use `/hello` endpoint as proxy for health validation.
+**Current Probe Targets:** The Docker Compose healthcheck and `health-check.sh` still probe `/hello`.
 
 #### 6.5.3.4 Graceful Shutdown Integration
 
@@ -11645,7 +11959,7 @@ The `infrastructure/monitoring/prometheus.yml` file provides complete Prometheus
 - **Purpose:** Dedicated health check monitoring separate from metrics
 - **Target:** Application container at hello-world-app:3000/health
 - **Scrape Frequency:** 30-second interval (lower frequency than metrics)
-- **Status:** ❌ **Not Functional** - `/health` endpoint not implemented
+- **Status:** ❌ **Not Functional** - the `/health` endpoint exists and returns `200 OK` with `application/json` `{"status":"up"}`, but that is not Prometheus exposition format, so `up{job="hello-world-health"}` stays 0 until the job becomes a blackbox-style HTTP probe or the endpoint emits exposition format
 
 **Alerting Configuration:**
 
@@ -11750,14 +12064,15 @@ The monitoring infrastructure demonstrates a clear gap between provisioned confi
 2. **Metrics Registry:** No metrics collector instantiated in application code
 3. **Metrics Middleware:** No request instrumentation to populate http_requests_total counter
 4. **Metrics Endpoint:** No `/metrics` endpoint in `src/backend/server.js` routes
-5. **Health Endpoint:** No `/health` endpoint returning 200 OK when healthy
-6. **Docker Services:** Prometheus and Grafana containers not defined in `docker-compose.yml`
+5. **Docker Services:** Prometheus and Grafana containers not defined in `docker-compose.yml`
+
+The `/health` liveness endpoint is implemented (`src/backend/handlers/healthHandler.js`), but its JSON body cannot be ingested by the `hello-world-health` scrape job.
 
 **Impact of Gaps:**
 - ✅ Configuration files demonstrate monitoring architecture for educational purposes
 - ❌ Dashboard panels display "No data" until metrics are implemented
-- ❌ Prometheus reports all scrape targets as down (`up{} = 0`)
-- ⚠️ Docker health checks use `/hello` endpoint as workaround
+- ❌ Prometheus reports all scrape targets as down (`up{} = 0`): `/metrics` is absent and `/health` returns JSON
+- ⚠️ The Docker Compose healthcheck and `health-check.sh` probe `/hello`
 
 **Upgrade Path:**
 The documented gaps provide a clear roadmap for learners to progressively enhance observability:
@@ -11765,8 +12080,7 @@ The documented gaps provide a clear roadmap for learners to progressively enhanc
 2. Create metrics registry and default collectors
 3. Implement request timing middleware to populate histogram
 4. Create `/metrics` endpoint returning Prometheus exposition format
-5. Create `/health` endpoint returning 200 OK
-6. Add Prometheus and Grafana services to docker-compose.yml
+5. Add Prometheus and Grafana services to docker-compose.yml
 
 ### 6.5.5 Observability Patterns
 
@@ -12007,6 +12321,7 @@ graph TD
         A[Node.js Application<br/>Port 3000]
         B[Console Logger<br/>logger.js]
         C[Request Logger<br/>Middleware]
+        K[GET /health<br/>200 JSON status up]
     end
     
     subgraph "Docker Infrastructure"
@@ -12021,6 +12336,7 @@ graph TD
     end
     
     A -->|Request Timing| C
+    A -->|Liveness Route| K
     C -->|Log Entry| B
     B -->|stdout/stderr| E
     E -->|Log Retrieval| F
@@ -12031,7 +12347,7 @@ graph TD
     D -->|Health Status| I[Docker ps status]
     D -->|Restart on Failure| A
     
-    G -->|HTTP Request| A
+    G -->|HTTP Request /hello| A
     A -->|Response| G
     G -->|Exit Code 0/1/2| J[CI/CD Pipeline]
     
@@ -12042,6 +12358,7 @@ graph TD
     style C fill:#90EE90
     style D fill:#90EE90
     style E fill:#90EE90
+    style K fill:#90EE90
     
     classDef implemented fill:#90EE90
     classDef provisioned fill:#FFE4B5
@@ -12051,9 +12368,10 @@ graph TD
 **Key Components Status:**
 - ✅ **Green (Implemented):** Fully functional monitoring components
 - **Console Logging:** All log levels, timestamps, request timing operational
-- **Docker Health Checks:** Active monitoring with automatic restart
+- **Docker Health Checks:** Active monitoring with automatic restart (probe `/hello`)
 - **Docker Logs:** Complete log capture and retrieval
-- **Health Check Script:** Programmatic validation for CI/CD
+- **Health Check Script:** Programmatic validation for CI/CD (probes `/hello`)
+- **Liveness Endpoint:** `GET /health` returns `200 OK` with `{"status":"up"}`; no current probe targets it
 
 #### 6.5.7.2 Planned Monitoring Architecture
 
@@ -12066,7 +12384,7 @@ graph TD
         B[Console Logger]
         C[Request Timing Middleware]
         D[NOT IMPLEMENTED<br/>/metrics endpoint<br/>prom-client]
-        E[NOT IMPLEMENTED<br/>/health endpoint]
+        E[IMPLEMENTED<br/>/health endpoint<br/>JSON body]
     end
     
     subgraph "Monitoring Infrastructure NOT IN docker-compose.yml"
@@ -12080,7 +12398,7 @@ graph TD
     end
     
     subgraph "Docker Infrastructure"
-        J[Docker Health Check<br/>Uses /hello as workaround]
+        J[Docker Health Check<br/>Probes /hello]
         K[Docker Logging Driver]
     end
     
@@ -12096,10 +12414,10 @@ graph TD
     A -->|Response Times| C
     
     D -.->|Would Expose<br/>Prometheus Format| F
-    E -.->|Would Return<br/>200 OK| F
+    E -.->|Returns 200 JSON<br/>not exposition format| F
     
     F -.->|Would Scrape<br/>Every 5s| D
-    F -.->|Would Scrape<br/>Every 30s| E
+    F -.->|Scrapes Every 30s<br/>parse fails, up=0| E
     
     H -.->|Configuration<br/>For| F
     I -.->|Configuration<br/>For| G
@@ -12113,12 +12431,12 @@ graph TD
     style A fill:#90EE90
     style B fill:#90EE90
     style C fill:#90EE90
+    style E fill:#90EE90
     style J fill:#90EE90
     style K fill:#90EE90
     style H fill:#FFE4B5
     style I fill:#FFE4B5
     style D fill:#FFB6C6
-    style E fill:#FFB6C6
     style F fill:#FFB6C6
     style G fill:#FFB6C6
 ```
@@ -12130,10 +12448,11 @@ graph TD
 
 **Implementation Gaps:**
 1. `/metrics` endpoint not implemented in application code
-2. `/health` endpoint not implemented (using `/hello` as workaround)
-3. prom-client library not installed in package.json
-4. Prometheus container not defined in docker-compose.yml
-5. Grafana container not defined in docker-compose.yml
+2. prom-client library not installed in package.json
+3. Prometheus container not defined in docker-compose.yml
+4. Grafana container not defined in docker-compose.yml
+
+The `/health` endpoint is implemented, but its JSON body is not Prometheus exposition format; the `hello-world-health` job needs a blackbox-style HTTP probe or an exposition-format response before it reports the service up.
 
 #### 6.5.7.3 Metrics Collection Flow (Planned)
 
@@ -12178,10 +12497,10 @@ sequenceDiagram
     end
     
     rect rgb(255, 245, 230)
-        Note over App,Prom: Every 30 seconds (health scrape)
+        Note over App,Prom: Every 30 seconds (health scrape, current state)
         Prom->>App: GET /health
-        App->>Prom: 200 OK
-        Prom->>Prom: Set up{job="hello-world-health"} = 1
+        App->>Prom: 200 OK application/json {"status":"up"}
+        Prom->>Prom: Not exposition format, set up{job="hello-world-health"} = 0
     end
 ```
 
@@ -12194,7 +12513,7 @@ flowchart TD
     subgraph "Application Container"
         A["Node.js Application<br/>Listening on Port 3000"]
         B["/hello endpoint<br/>Returns 'Hello world'"]
-        C["MISSING: /health endpoint<br/>Would return 200 OK"]
+        C["/health endpoint<br/>Returns JSON status up"]
     end
     
     subgraph "Docker Health Checks IMPLEMENTED"
@@ -12204,7 +12523,7 @@ flowchart TD
         G["Restart Container<br/>restart: unless-stopped"]
     end
     
-    subgraph "Prometheus Health Checks NOT IMPLEMENTED"
+    subgraph "Prometheus Health Scrape CONFIGURED, NOT FUNCTIONAL"
         H["Prometheus Health Scrape<br/>interval: 30s"]
         I["up metric<br/>job=hello-world-health"]
     end
@@ -12225,9 +12544,9 @@ flowchart TD
     F --> G
     G --> A
     
-    H -.->|"GET /health<br/>NOT IMPLEMENTED"| C
-    C -.->|"Would return<br/>200 OK"| H
-    H -.->|"Would set"| I
+    H -.->|"GET /health"| C
+    C -.->|"200 JSON<br/>not exposition format"| H
+    H -.->|"Sets 0"| I
     
     J -->|"HTTP GET /hello"| B
     B -->|"Response"| K
@@ -12235,6 +12554,7 @@ flowchart TD
     K -->|"No"| M
     
     style B fill:#90EE90
+    style C fill:#90EE90
     style D fill:#90EE90
     style E fill:#90EE90
     style F fill:#90EE90
@@ -12243,7 +12563,6 @@ flowchart TD
     style K fill:#90EE90
     style L fill:#90EE90
     style M fill:#90EE90
-    style C fill:#FFB6C6
     style H fill:#FFB6C6
     style I fill:#FFB6C6
 ```
@@ -12251,10 +12570,11 @@ flowchart TD
 **Implemented Health Check Mechanisms:**
 1. **Docker Health Check:** Active monitoring with automatic recovery
 2. **Bash Health Script:** Programmatic validation for deployment pipelines
-3. **Workaround:** Both use `/hello` endpoint since `/health` not implemented
+3. **Current Probe Targets:** Both use `/hello`; neither targets the dedicated `/health` endpoint
+4. **Liveness Endpoint:** `GET /health` returns `200 OK` with `application/json` `{"status":"up"}`
 
-**Planned Health Check Mechanism:**
-- **Prometheus Health Scrape:** Dedicated health monitoring separate from metrics (requires `/health` endpoint)
+**Configured but Non-Functional Health Check Mechanism:**
+- **Prometheus Health Scrape:** Dedicated health monitoring separate from metrics; it scrapes the existing `/health`, but records `up{job="hello-world-health"} = 0` until the job becomes a blackbox-style HTTP probe or the endpoint emits exposition format
 
 #### 6.5.7.5 Grafana Dashboard Layout
 
@@ -12344,6 +12664,7 @@ The implemented monitoring capabilities are **appropriate and sufficient** for t
 - Console logging provides immediate visibility into application behavior for learners
 - Docker health checks demonstrate container-level monitoring concepts
 - Health check script teaches programmatic validation patterns
+- The dedicated `GET /health` liveness endpoint demonstrates a minimal JSON health response
 - Provisioned configuration files expose learners to production monitoring architecture
 
 **Adequate for Development Deployment:**
@@ -12355,7 +12676,7 @@ The implemented monitoring capabilities are **appropriate and sufficient** for t
 **Adequate for Small-Scale Production:**
 - Stateless design documented in Section 5.4.4 eliminates state-related monitoring complexity
 - No database or external dependencies means no integration point monitoring required
-- Single endpoint simplifies observability requirements
+- Two fixed endpoints (`/hello` and `/health`) keep observability requirements simple
 - Docker logs provide sufficient audit trail for compliance
 
 #### 6.5.8.2 Limitations for Enterprise Scale
@@ -12365,18 +12686,18 @@ The monitoring implementation would require significant enhancement for enterpri
 **Insufficient for High-Scale Production:**
 
 | Limitation | Enterprise Requirement | Current Gap | Mitigation Strategy |
-|---|---|---|
+|---|---|---|---|
 | No Centralized Logging | Log aggregation with retention and search | Console logs only | Implement Elasticsearch or CloudWatch Logs |
-| No Metrics Collection | Performance monitoring and capacity planning | No metrics endpoints | Implement prom-client and /metrics endpoint |
+| No Metrics Collection | Performance monitoring and capacity planning | No `/metrics` endpoint; `/health` returns JSON, not exposition format | Implement prom-client and /metrics endpoint |
 | No Alerting | Proactive incident detection and notification | No alerts configured | Implement Alertmanager with PagerDuty integration |
 | No Distributed Tracing | Request correlation across services | Not applicable (monolith) | N/A for current architecture |
 
 **Insufficient for Compliance Requirements:**
 
 | Compliance Need | Monitoring Requirement | Current Gap | Remediation |
-|---|---|---|
+|---|---|---|---|
 | Audit Logging | Tamper-proof log retention | Ephemeral Docker logs | Implement write-once log storage |
-| Access Tracking | Request source IP and authentication | Logs capture method/path only | Add user identity and IP to logs |
+| Access Tracking | Request source IP and authentication | Logs capture method/URL only | Add user identity and IP to logs |
 | Data Residency | Logs stored in compliant regions | No region enforcement | Configure log forwarding to compliant storage |
 | Retention Policies | 90-day+ log retention | Docker logs deleted with container | Implement log archival to durable storage |
 
@@ -12389,7 +12710,7 @@ The gap between provisioned infrastructure and implemented functionality provide
 2. Create metrics registry with default Node.js collectors
 3. Implement request counter and histogram middleware
 4. Create `/metrics` endpoint returning Prometheus exposition format
-5. Create `/health` endpoint returning 200 OK with optional health checks
+5. Make the `hello-world-health` job usable: convert it to a blackbox-style HTTP probe of the existing `/health` endpoint, or have `/health` emit exposition format
 
 **Phase 2: Monitoring Services Deployment (Estimated Effort: 1-2 hours)**
 1. Add Prometheus service to `docker-compose.yml` with volume mounts
@@ -12420,16 +12741,23 @@ The gap between provisioned infrastructure and implemented functionality provide
 - `src/backend/config.js` - Test mode flag for log suppression
 
 **Health Check Implementation:**
-- `infrastructure/local/docker-compose.yml` - Docker health check configuration with 30s interval
-- `infrastructure/scripts/health-check.sh` - Bash health validation script for CI/CD
+- `src/backend/handlers/healthHandler.js` - `GET /health` liveness handler returning `200` `application/json` `{"status":"up"}`; non-GET methods delegated to `errorHandler.handle405`
+- `src/backend/server.js` - `createRoutes()` registers the `/health` route alongside `/hello`
+- `infrastructure/local/docker-compose.yml` - Docker health check configuration with 30s interval (probes `/hello`)
+- `infrastructure/scripts/health-check.sh` - Bash health validation script for CI/CD (probes `/hello`)
 - `src/backend/index.js` - Graceful shutdown implementation with SIGTERM/SIGINT handlers
 
+**Health Check Tests:**
+- `src/backend/__tests__/handlers/healthHandler.test.js` - Unit tests for the `/health` handler
+- `src/backend/__tests__/integration/health.test.js` - Live-server integration tests for `/health`
+
 **Monitoring Configuration (Provisioned):**
-- `infrastructure/monitoring/prometheus.yml` - Complete Prometheus configuration with 3 scrape jobs
+- `infrastructure/monitoring/prometheus.yml` - Complete Prometheus configuration with 3 scrape jobs (`hello-world-health` uses `metrics_path: '/health'`)
 - `infrastructure/monitoring/grafana-dashboard.json` - 13-panel dashboard definition (referenced in summary)
 
 **Documentation:**
-- `README.md` - Main project documentation with monitoring section
+- `README.md` - Main project documentation with monitoring section and `GET /health` API section
+- `src/backend/README.md` - Backend documentation with `GET /health` API section
 - `infrastructure/README.md` - Infrastructure documentation detailing monitoring setup
 
 #### Technical Specification Cross-References
@@ -12439,6 +12767,7 @@ The gap between provisioned infrastructure and implemented functionality provide
 - **Section 6.1.1 Applicability Statement** - Monolithic architecture rationale, single-process design
 - **Section 6.1.3.1 Monolithic HTTP Server Architecture** - Single-process implementation eliminating distributed tracing needs
 - **logger.js - Centralized Logging Utility** - Detailed logger component specification with log levels and functions
+- **healthHandler.js - Health Endpoint Handler** - `/health` handler specification (Section 5.2.5)
 - **Section 1.2.1 Project Context** - Educational focus and standalone project rationale
 - **Section 5.4.4 Performance and Scalability** - Stateless design enabling horizontal scaling
 
@@ -12532,16 +12861,18 @@ Tests are organized in a hierarchical directory structure mirroring the source c
 src/backend/__tests__/
 ├── setup.js                          # Global test configuration and mocks
 ├── config.test.js                    # Configuration loading unit tests
-├── errorHandler.test.js              # Error handling unit tests
+├── errorHandler.test.js              # Error handling unit tests (handle404/handle405)
 ├── index.test.js                     # Bootstrap logic unit tests
-├── router.test.js                    # Routing logic unit tests
+├── router.test.js                    # Routing logic unit tests (router.js)
 ├── server.test.js                    # Server lifecycle unit tests
 ├── handlers/                         # Handler unit tests (mirroring src structure)
-│   ├── error.test.js                # Error handler tests
-│   ├── hello.test.js                # Hello handler tests
-│   └── helloHandler.test.js         # Alternative hello handler tests
+│   ├── error.test.js                # Error handler tests (handlers/error.js)
+│   ├── healthHandler.test.js        # /health handler unit tests (handlers/healthHandler.js)
+│   ├── hello.test.js                # Legacy tests requiring missing handlers/hello
+│   └── helloHandler.test.js         # /hello handler unit tests (handlers/helloHandler.js)
 ├── integration/                      # Integration test suite
-│   └── api.test.js                  # Full HTTP integration tests
+│   ├── api.test.js                  # Full HTTP integration tests
+│   └── health.test.js               # /health live-pipeline integration tests
 └── utils/                           # Utility unit tests
     ├── constants.test.js            # Constants validation tests
     └── logger.test.js               # Logger utility tests
@@ -12600,6 +12931,13 @@ jest.mock('../../utils/logger', () => ({
 }));
 ```
 
+The `/health` handler unit suite (`__tests__/handlers/healthHandler.test.js`) mocks the modules the handler actually imports, so 405 delegation and log calls are observed without writing a response:
+
+```javascript
+jest.mock('../../errorHandler', () => ({ handle405: jest.fn() }));
+jest.mock('../../utils/logger', () => ({ info: jest.fn(), error: jest.fn() }));
+```
+
 **Mock Request/Response Objects**:
 
 HTTP request and response objects are mocked to simulate server interactions without network calls:
@@ -12618,6 +12956,8 @@ const mockResponse = {
   end: jest.fn()
 };
 ```
+
+`healthHandler.test.js` builds the same shape per test in `beforeEach` (`{ method: 'GET', url: '/health' }` and a response with `statusCode: null`, chainable `setHeader` and `end` mocks) and calls `jest.resetAllMocks()` in `afterEach`.
 
 **Environment Variable Mocking**:
 
@@ -12641,50 +12981,52 @@ afterEach(() => {
 });
 ```
 
+**Log Observation in Integration Tests**:
+
+`__tests__/integration/health.test.js` replaces `logger.logRequest` with a plain call-through function (`observeLogRequest`) before requiring the server module, recording method, URL, status code and response time. It avoids `jest.spyOn()` because the `resetMocks` setting would erase a spy's call-through implementation before each test. The original `logRequest` is restored in `afterAll`.
+
 **Mock Lifecycle Management**:
 
 - `beforeEach`: Initialize fresh mocks with `jest.clearAllMocks()`
 - `afterEach`: Restore original implementations with `jest.restoreAllMocks()`
 - Per-test cleanup prevents mock state leakage between tests
 
-**Evidence**: `src/backend/__tests__/setup.js` contains global mock configuration, and `src/backend/__tests__/handlers/hello.test.js` demonstrates module-level and request/response mocking patterns.
+**Evidence**: `src/backend/__tests__/setup.js` contains global mock configuration; `src/backend/__tests__/handlers/hello.test.js` and `src/backend/__tests__/handlers/healthHandler.test.js` demonstrate module-level and request/response mocking patterns.
+
+#### Unit Test Suite: healthHandler.test.js
+
+`__tests__/handlers/healthHandler.test.js` exercises `handleHealthRequest` in isolation (one `describe('handleHealthRequest')` block, 8 tests):
+
+| Test | Verified Behavior |
+|------|-------------------|
+| `should return 200 OK with a JSON "up" status for GET requests` | `statusCode` 200; `setHeader(Content-Type, application/json)` once; `end('{"status":"up"}')` once; no `handle405` call; entry and success info logs in order |
+| `should return the same response for GET requests with a query string` | `/health?probe=1` produces the identical 200 JSON response |
+| `should call handle405 for %s requests` (`it.each` POST, PUT, DELETE, HEAD) | `handle405(res)` called; no direct `statusCode`/`setHeader`/`end` writes; `logger.error` called |
+| `should propagate an error thrown while writing the response` | A throwing `setHeader` propagates out of the handler; `end` and `handle405` are not called |
 
 #### Code Coverage Requirements
 
-Strict code coverage thresholds enforce quality standards and prevent untested code paths:
+Coverage thresholds are configured in `jest.config.js`; Jest fails the run when they are not met:
 
 | Coverage Scope | Branches | Functions | Lines | Statements | Rationale |
 |----------------|----------|-----------|-------|------------|-----------|
 | Global (All Files) | 80% | 90% | 85% | 85% | Baseline quality standard |
-| handlers/hello.js | 100% | 100% | 100% | 100% | Critical business logic |
-| handlers/error.js | 90% | 100% | 90% | 90% | Error handling paths |
+| `./handlers/hello.js` | 100% | 100% | 100% | 100% | Intended for the hello handler; the key matches no file |
+| `./handlers/error.js` | 90% | 100% | 90% | 90% | Error handling paths |
 
-**Coverage Enforcement Mechanism**:
-
-Jest fails test runs when coverage thresholds are not met, preventing untested code from being merged:
+**Coverage Enforcement Mechanism** (as configured in `src/backend/jest.config.js`):
 
 ```javascript
-coverageThresholds: {
-  global: {
-    branches: 80,
-    functions: 90,
-    lines: 85,
-    statements: 85
-  },
-  './handlers/hello.js': {
-    branches: 100,
-    functions: 100,
-    lines: 100,
-    statements: 100
-  },
-  './handlers/error.js': {
-    branches: 90,
-    functions: 100,
-    lines: 90,
-    statements: 90
-  }
+coverageThreshold: {
+  global: { branches: 80, functions: 90, lines: 85, statements: 85 },
+  './handlers/hello.js': { branches: 100, functions: 100, lines: 100, statements: 100 },
+  './handlers/error.js': { branches: 90, functions: 100, lines: 90, statements: 90 }
 }
 ```
+
+**Per-File Key Mismatch**:
+
+The hello handler lives in `handlers/helloHandler.js`; no `handlers/hello.js` exists. The `'./handlers/hello.js'` entry therefore matches no file, and Jest reports `Coverage data for ./handlers/hello.js was not found.` No per-file threshold covers `helloHandler.js` or `healthHandler.js`; both are held only to the global thresholds (each currently measures 100%, see Section 6.6.4.6).
 
 **Coverage Collection Configuration**:
 
@@ -12693,11 +13035,7 @@ All JavaScript files are included in coverage collection except infrastructure f
 - **Included**: All `.js` files in source directories
 - **Excluded**: `node_modules/`, `coverage/`, `jest.config.js`, `.eslintrc.js`
 
-**100% Coverage Requirement for Critical Components**:
-
-The `handlers/hello.js` component requires perfect coverage across all metrics, reflecting its status as the core business logic. This ensures every code path, branch, and edge case is tested.
-
-**Evidence**: `src/backend/jest.config.js` (lines 30-52) defines coverage thresholds with file-specific overrides for critical components.
+**Evidence**: `src/backend/jest.config.js` (`coverageThreshold` block) defines the global and per-file thresholds.
 
 #### Test Naming Conventions
 
@@ -12706,7 +13044,9 @@ Test names follow consistent conventions that make test intent immediately clear
 **File Naming**: `<component-name>.test.js` pattern
 - `config.test.js` - Tests for configuration module
 - `router.test.js` - Tests for routing logic
-- `hello.test.js` - Tests for hello handler
+- `helloHandler.test.js` - Tests for the `/hello` handler
+- `healthHandler.test.js` - Tests for the `/health` handler
+- `integration/health.test.js` - Live-pipeline tests for `/health`
 
 **Test Suite Structure**:
 
@@ -12725,6 +13065,8 @@ describe('Component or Module Name', () => {
 - `'GET /hello should return 200 OK with \'Hello world\''`
 - `'should return Hello world with 200 status for GET requests'`
 - `'should call handleMethodNotAllowed for non-GET requests'`
+- `'should return 200 OK with a JSON "up" status for GET requests'`
+- `'should return 404 Not Found for GET /health/ with a trailing slash'`
 - `'should validate port number within acceptable range'`
 - `'should apply default configuration when environment variables are missing'`
 
@@ -12736,7 +13078,7 @@ describe('Component or Module Name', () => {
 4. **Negative Cases Explicit**: "should throw error when invalid input provided"
 5. **Edge Cases Identified**: "should handle empty string", "should handle boundary values"
 
-**Evidence**: All test files discovered (`config.test.js`, `router.test.js`, `handlers/hello.test.js`, `integration/api.test.js`) follow these consistent naming patterns.
+**Evidence**: Test files (`config.test.js`, `router.test.js`, `handlers/hello.test.js`, `handlers/healthHandler.test.js`, `integration/api.test.js`, `integration/health.test.js`) follow these naming patterns.
 
 #### Test Data Management
 
@@ -12756,6 +13098,8 @@ expect(request.url).toBe(ROUTES.HELLO);                        // "/hello"
 expect(config.port).toBe(CONFIG.DEFAULT_PORT);                 // 3000
 ```
 
+The health suites import `HTTP_STATUS`, `MESSAGES`, `HEADERS` and `HTTP_METHODS` and build the expected body as `JSON.stringify({ status: MESSAGES.HEALTH_STATUS_UP })`.
+
 **Validated Constants** (`__tests__/utils/constants.test.js`):
 
 Constants themselves are tested to ensure correctness:
@@ -12763,9 +13107,11 @@ Constants themselves are tested to ensure correctness:
 | Constant Category | Validated Values | Purpose |
 |------------------|------------------|---------|
 | HTTP_STATUS | OK=200, NOT_FOUND=404, METHOD_NOT_ALLOWED=405, INTERNAL_SERVER_ERROR=500 | Status code assertions |
-| ROUTES | HELLO='/hello' | Endpoint path testing |
+| ROUTES | HELLO='/hello' | Endpoint path testing (no `/health` route constant exists) |
 | CONFIG | DEFAULT_PORT=3000, ENV_VAR_PORT='PORT' | Configuration testing |
-| MESSAGES | HELLO_RESPONSE='Hello world', NOT_FOUND='Not Found', METHOD_NOT_ALLOWED='Method Not Allowed' | Response body assertions |
+| MESSAGES | HELLO_RESPONSE='Hello world', HEALTH_STATUS_UP='up', NOT_FOUND='Not Found', METHOD_NOT_ALLOWED='Method Not Allowed', SERVER_ERROR='Internal Server Error', SERVER_STARTED='Server started on port %d' | Response body assertions |
+| HEADERS | CONTENT_TYPE='Content-Type', CONTENT_TYPE_TEXT='text/plain', CONTENT_TYPE_JSON='application/json', ALLOW='Allow' | Header assertions |
+| HTTP_METHODS | GET='GET' | Method assertions |
 
 **Mock Data Builder Functions**:
 
@@ -12802,13 +13148,13 @@ The system is stateless with no database or persistent storage, eliminating need
 - Database cleanup between tests
 - Schema migrations for tests
 
-**Evidence**: `src/backend/__tests__/integration/api.test.js` (line 12) imports constants for assertions, and `__tests__/utils/constants.test.js` validates all constant values.
+**Evidence**: `src/backend/__tests__/integration/api.test.js` (line 12) imports constants for assertions, and `__tests__/utils/constants.test.js` validates all constant values, including `HEALTH_STATUS_UP` and `CONTENT_TYPE_JSON`.
 
 #### 6.6.2.2 Integration Testing
 
 #### Service Integration Test Approach
 
-Integration tests verify the complete HTTP request/response cycle using a real server instance rather than mocked components. This approach ensures that all layers (server, middleware, router, handlers) integrate correctly.
+Integration tests verify the complete HTTP request/response cycle using a real server instance rather than mocked components. This approach ensures that all layers (server, middleware, routing, handlers) integrate correctly.
 
 **Integration Test Framework: Supertest 6.3.3**
 
@@ -12825,6 +13171,8 @@ const response = await request(`http://localhost:${config.port}`)
   .expect('Content-Type', 'text/plain');
 ```
 
+`health.test.js` passes the server returned by `startServer()` directly to Supertest, e.g. `await request(server).get('/health')`.
+
 **Key Capabilities**:
 
 - **Direct Server Testing**: Accepts Node.js HTTP server instances without network I/O
@@ -12832,7 +13180,7 @@ const response = await request(`http://localhost:${config.port}`)
 - **Full Stack Testing**: Exercises complete middleware chain, routing, and handlers
 - **Promise-Based**: Integrates seamlessly with Jest's async testing patterns
 
-**Evidence**: `src/backend/__tests__/integration/api.test.js` (line 9) imports and uses Supertest for full HTTP request/response cycle testing.
+**Evidence**: `src/backend/__tests__/integration/api.test.js` (line 9) and `src/backend/__tests__/integration/health.test.js` import and use Supertest for full HTTP request/response cycle testing.
 
 #### API Testing Strategy
 
@@ -12869,7 +13217,7 @@ describe('API Integration Tests', () => {
 - **Realistic Testing**: Tests run against actual HTTP server, not mocks
 - **Resource Efficiency**: Minimal overhead in CI/CD environments
 
-**Integration Test Scenarios** (5 comprehensive test cases):
+**Integration Test Scenarios — `api.test.js`** (5 test cases):
 
 | Test Scenario | HTTP Method | Path | Expected Status | Expected Response | Validation Focus |
 |---------------|-------------|------|-----------------|-------------------|------------------|
@@ -12878,6 +13226,28 @@ describe('API Integration Tests', () => {
 | Method Restriction | POST | /hello | 405 Method Not Allowed | Method Not Allowed message + Allow: GET header | HTTP method validation |
 | Unknown Route | GET | /undefined | 404 Not Found | "Not Found" message | 404 handling |
 | Server Error Handling | Various | Error-triggering path | 500 Internal Server Error | Generic error message | Error recovery |
+
+**Integration Test Scenarios — `health.test.js`** (7 tests in two `describe` blocks):
+
+The suite sets `process.env.PORT = '3101'` before requiring the logger and server modules (config.js reads the environment once at load), then starts a real server with `serverModule.startServer()`.
+
+| Test Scenario | HTTP Method | Path | Expected Status | Expected Response | Validation Focus |
+|---------------|-------------|------|-----------------|-------------------|------------------|
+| Liveness Response | GET | /health | 200 OK | `application/json`, `{"status":"up"}` | Body, content type, security headers |
+| Query String Ignored | GET | /health?probe=1 | 200 OK | Same JSON body | Exact-match routing on pathname; one request-log entry with URL `/health?probe=1` |
+| Method Restriction | POST | /health | 405 Method Not Allowed | `text/plain`, `Allow: GET` | Shared 405 format, security headers |
+| Trailing Slash | GET | /health/ | 404 Not Found | "Not Found" | No path normalization, security headers |
+| /hello Regression | GET | /hello | 200 OK | "Hello world" | Existing endpoint unaffected |
+| /hello Regression | POST | /hello | 405 Method Not Allowed | `Allow: GET` | Existing 405 behavior unaffected |
+| Handler Throws | GET | /health (port 3102) | 500 Internal Server Error | `text/plain` "Internal Server Error" | Middleware error path, security headers retained, server keeps serving GET /hello |
+
+**Isolated Failure Server (PORT 3102)**:
+
+The second block sets `PORT` to `3102` and, inside `jest.isolateModules()`, uses `jest.doMock('../../handlers/healthHandler', …)` to load a separate server module whose `handleHealthRequest` throws `'simulated failure'` synchronously. The factory returns a plain function rather than `jest.fn()` because `resetMocks` would wipe a mock implementation. Each server module instance holds its own private server reference, so the two blocks cannot stop each other's servers.
+
+**Connection Cleanup**:
+
+Both `afterAll` hooks call `server.closeAllConnections()` (when the server started) before `stopServer()`, so a request left without a response cannot block shutdown and the run exits with the failure instead of hanging. The isolated block then calls `jest.dontMock('../../handlers/healthHandler')`, and the file restores `PORT` and `logger.logRequest`.
 
 **Multi-Level Validation Pattern**:
 
@@ -12897,13 +13267,15 @@ expect(response.text).toBe(MESSAGES.HELLO_RESPONSE);
 
 **Security Header Validation**:
 
-Integration tests verify that security headers are applied to all responses:
+Integration tests verify that security headers are applied to responses:
 
 - `X-Content-Type-Options: nosniff` - Prevents MIME type sniffing
 - `X-Frame-Options: DENY` - Prevents clickjacking attacks
 - `Content-Security-Policy: default-src 'none'` - Restricts resource loading
 
-**Evidence**: `src/backend/__tests__/integration/api.test.js` contains 5 test cases covering success paths, error scenarios, method restrictions, and 404 handling. Server lifecycle management is implemented in `beforeAll` and `afterAll` hooks (lines 15-31).
+`health.test.js` asserts all three on the `/health` 200, 405, 404 and 500 responses.
+
+**Evidence**: `src/backend/__tests__/integration/api.test.js` contains 5 test cases covering success paths, error scenarios, method restrictions, and 404 handling, with server lifecycle in `beforeAll`/`afterAll` hooks (lines 15-31). `src/backend/__tests__/integration/health.test.js` contains the `/health` live-pipeline and isolated-failure suites.
 
 #### Test Environment Management
 
@@ -12915,7 +13287,7 @@ Jest automatically sets `NODE_ENV=test`, and the test setup configures additiona
 |---------------------|------------|---------|
 | NODE_ENV | test | Identifies test execution environment |
 | IS_TEST | true | Prevents automatic server startup in index.js |
-| PORT | 3000 (configurable) | Test server port |
+| PORT | 3000 (configurable); `3101` and `3102` in `integration/health.test.js` | Test server port |
 | HOST | localhost | Test server host |
 | LOG_LEVEL | INFO | Logging verbosity for tests |
 
@@ -12923,9 +13295,9 @@ Jest automatically sets `NODE_ENV=test`, and the test setup configures additiona
 
 1. **Mock Clearing**: `jest.clearAllMocks()` in `beforeEach` hooks clears call history
 2. **Mock Restoration**: `jest.restoreAllMocks()` in `afterEach` hooks restores original implementations
-3. **Module Reset**: `jest.resetModules()` when needed to clear module cache
+3. **Module Reset**: `jest.resetModules()` when needed to clear module cache; `jest.isolateModules()` for the isolated failure server
 4. **Environment Cleanup**: Environment variable restoration after tests
-5. **Server Lifecycle**: Proper startup/shutdown prevents port conflicts
+5. **Server Lifecycle**: Proper startup/shutdown prevents port conflicts; `closeAllConnections()` precedes `stopServer()` in the health suite
 
 **Test-Friendly Bootstrap Logic**:
 
@@ -12969,12 +13341,12 @@ For the Node.js Hello World Service, end-to-end testing is functionally equivale
 
 **E2E Test Scenarios Covered by Integration Tests**:
 
-The integration test suite (`__tests__/integration/api.test.js`) effectively provides E2E coverage by testing complete user-facing workflows:
+The integration suites (`__tests__/integration/api.test.js` and `__tests__/integration/health.test.js`) effectively provide E2E coverage by testing complete user-facing workflows:
 
-1. **Successful Request Flow**: Client HTTP request → Server reception → Middleware chain → Router → Handler → Response generation → Client response
+1. **Successful Request Flow**: Client HTTP request → Server reception → Middleware chain → Route lookup → Handler → Response generation → Client response
 2. **Error Scenarios**: Invalid routes, disallowed methods, server errors - complete error handling flow
-3. **Security Header Application**: Verification that security middleware is applied to all responses
-4. **Health Check Verification**: The `/hello` endpoint doubles as a health check for deployment verification
+3. **Security Header Application**: Verification that security middleware is applied to responses
+4. **Liveness Verification**: `health.test.js` verifies the dedicated `GET /health` endpoint; deployment probes (Docker Compose healthcheck and `health-check.sh`) still target `/hello`
 
 **E2E Testing Through Deployment Verification**:
 
@@ -13017,9 +13389,9 @@ healthcheck:
 | Cross-Browser Testing | N/A - Backend service only | N/A |
 | Multi-System Integration | N/A - Standalone service | N/A |
 | Performance Testing Under Load | Optional - Not critical for educational service | Can be added with k6 or Artillery if needed |
-| User Journey Testing | N/A - Single endpoint only | Integration tests cover the only user journey |
+| User Journey Testing | N/A - Two fixed endpoints (`/hello`, `/health`), no multi-step journeys | Integration tests cover both request journeys |
 
-**Conclusion**: The integration test suite provides complete end-to-end coverage for this system architecture. Traditional E2E test infrastructure (UI automation, browser testing, multi-system orchestration) is unnecessary and would add complexity without value.
+**Conclusion**: The integration test suites provide complete end-to-end coverage for this system architecture. Traditional E2E test infrastructure (UI automation, browser testing, multi-system orchestration) is unnecessary and would add complexity without value.
 
 **Evidence**: `infrastructure/scripts/health-check.sh` implements deployment verification, and `infrastructure/local/docker-compose.yml` configures Docker health checks for E2E service availability testing.
 
@@ -13219,7 +13591,7 @@ If flaky tests occur, investigation focuses on:
 
 #### 6.6.4.1 Code Coverage Targets
 
-**Global Coverage Requirements**:
+**Global Coverage Requirements** (configured):
 
 | Metric | Target | Enforcement | Purpose |
 |--------|--------|-------------|---------|
@@ -13228,17 +13600,17 @@ If flaky tests occur, investigation focuses on:
 | Line Coverage | ≥ 85% | Hard threshold | Ensures code execution coverage |
 | Statement Coverage | ≥ 85% | Hard threshold | Ensures all statements executed |
 
-**Critical Component Coverage Requirements**:
+**Per-File Coverage Requirements** (configured):
 
-| Component | Branch | Function | Line | Statement | Rationale |
+| Component Key | Branch | Function | Line | Statement | Rationale |
 |-----------|--------|----------|------|-----------|-----------|
-| handlers/hello.js | 100% | 100% | 100% | 100% | Core business logic - zero tolerance for untested code |
-| handlers/error.js | 90% | 100% | 90% | 90% | Error handling critical to reliability |
-| All Other Components | 80% | 90% | 85% | 85% | General quality baseline |
+| `./handlers/hello.js` | 100% | 100% | 100% | 100% | Intended for the core hello handler; the key matches no file (the handler is `handlers/helloHandler.js`) |
+| `./handlers/error.js` | 90% | 100% | 90% | 90% | Error handling critical to reliability |
+| All Other Components | 80% | 90% | 85% | 85% | Global baseline (includes `helloHandler.js` and `healthHandler.js`) |
 
 **Coverage Threshold Philosophy**:
 
-- **100% for Critical Paths**: Business logic handlers require perfect coverage
+- **100% for Critical Paths**: Business logic handlers are intended to have perfect coverage
 - **90-100% for Error Handling**: Error scenarios must be comprehensively tested
 - **80-90% for Infrastructure**: Configuration, utilities, and supporting code
 - **Progressive Enhancement**: Coverage targets can increase over time
@@ -13249,14 +13621,16 @@ Jest enforces coverage thresholds during test execution:
 
 ```javascript
 // Tests fail with exit code 1 if coverage below thresholds
-coverageThresholds: {
+coverageThreshold: {
   global: { branches: 80, functions: 90, lines: 85, statements: 85 },
   './handlers/hello.js': { branches: 100, functions: 100, lines: 100, statements: 100 },
   './handlers/error.js': { branches: 90, functions: 100, lines: 90, statements: 90 }
 }
 ```
 
-**Evidence**: `src/backend/jest.config.js` (lines 30-52) defines enforced coverage thresholds for global scope and critical components.
+Because `./handlers/hello.js` does not exist, Jest reports `Coverage data for ./handlers/hello.js was not found.` and that per-file threshold is never applied to the real handler.
+
+**Evidence**: `src/backend/jest.config.js` (`coverageThreshold` block) defines the thresholds for global scope and per-file keys.
 
 #### 6.6.4.2 Test Success Rate Requirements
 
@@ -13283,6 +13657,8 @@ coverageThresholds: {
 | Flaky Test Rate | 0% | No intermittent failures |
 | Test Execution Time | < 30 seconds | Fast feedback loops |
 | Test Determinism | 100% | Same results on every run |
+
+The current full-suite run does not meet the 100% success target; see Section 6.6.4.6.
 
 #### 6.6.4.3 Performance Test Thresholds
 
@@ -13320,7 +13696,7 @@ Additional checks before production deployment:
 
 | Quality Gate | Requirement | Verification Method |
 |--------------|-------------|---------------------|
-| Health Check | Service responds correctly | `health-check.sh` script |
+| Health Check | Service responds correctly | `health-check.sh` script (probes `/hello`) |
 | Container Build | Docker image builds successfully | CI/CD build step |
 | Startup Success | Server starts without errors | Container logs |
 | Port Availability | Port 3000 available | Setup validation |
@@ -13348,6 +13724,55 @@ Test code serves as executable documentation demonstrating:
 - Configuration options and defaults
 - API contracts and response formats
 
+#### 6.6.4.6 Current Verified Test Results
+
+The repository has no `src/backend/package.json` and the root `package.json` defines no test script, so the suites were run with Jest 29 from a copy of `src/backend` with `jest@29`, `supertest@6.3.3`, `jest-junit` and `dotenv@16.0.3` (required by `config.js`) installed.
+
+**Feature Suites** (`healthHandler`, `integration/health`, `utils/constants`, `helloHandler`):
+
+| Metric | Result |
+|--------|--------|
+| Test Suites | 4 passed / 4 |
+| Tests | 35 passed / 35 |
+
+**Full Run** (`jest --coverage`, exit code 1):
+
+| Metric | Result |
+|--------|--------|
+| Test Suites | 13 total: 6 passed, 7 failed |
+| Tests | 66 total: 44 passed, 22 failed |
+| Passing Suites | `errorHandler`, `handlers/error`, `handlers/healthHandler`, `handlers/helloHandler`, `integration/health`, `utils/constants` |
+| Failing Suites | `server`, `config`, `utils/logger`, `router`, `handlers/hello`, `integration/api`, `index` |
+
+Three failing suites cannot load their subject module:
+
+| Suite | Error |
+|-------|-------|
+| `__tests__/config.test.js` | `Cannot find module '../../config'` |
+| `__tests__/handlers/hello.test.js` | `Cannot find module '../../handlers/hello'` |
+| `__tests__/server.test.js` | `Cannot find module '../handlers/hello'` |
+
+**Coverage Against Global Thresholds** (all unmet):
+
+| Metric | Threshold | Measured |
+|--------|-----------|----------|
+| Statements | 85% | 69.2% |
+| Branches | 80% | 61.76% |
+| Lines | 85% | 69.46% |
+| Functions | 90% | 67.92% |
+
+**Per-File Coverage of Note**:
+
+| File | Statements | Branches | Functions | Lines |
+|------|-----------|----------|-----------|-------|
+| `handlers/healthHandler.js` | 100% | 100% | 100% | 100% |
+| `handlers/helloHandler.js` | 100% | 100% | 100% | 100% |
+| `handlers/error.js` | 100% | 100% | 100% | 100% |
+| `server.js` | 75.51% | 75% | 90% | 75.51% |
+| `router.js` | 36.84% | 0% | 50% | 36.84% |
+
+Jest also reports `Coverage data for ./handlers/hello.js was not found.` for the per-file key described in Section 6.6.4.1.
+
 ### 6.6.5 Test Environment Architecture
 
 #### 6.6.5.1 Test Environment Components
@@ -13371,9 +13796,9 @@ graph TB
     
     subgraph "Test Suites"
         UnitTests[Unit Tests<br/>__tests__/*.test.js]
-        HandlerTests[Handler Tests<br/>__tests__/handlers/*.test.js]
+        HandlerTests[Handler Tests<br/>__tests__/handlers/*.test.js<br/>incl. healthHandler.test.js]
         UtilTests[Utility Tests<br/>__tests__/utils/*.test.js]
-        IntegrationTests[Integration Tests<br/>__tests__/integration/api.test.js]
+        IntegrationTests[Integration Tests<br/>__tests__/integration/api.test.js<br/>__tests__/integration/health.test.js]
     end
     
     subgraph "System Under Test"
@@ -13381,7 +13806,7 @@ graph TB
         Server[HTTP Server<br/>server.js]
         Router[Router<br/>router.js]
         Handlers[Handlers<br/>handlers/*.js]
-        Middleware[Middleware<br/>middleware/*]
+        Middleware[Middleware<br/>middleware/index.js]
         Utils[Utilities<br/>utils/*]
     end
     
@@ -13419,10 +13844,8 @@ graph TB
     HandlerTests --> Handlers
     UtilTests --> Utils
     
-    IntegrationTests --> Server
-    Server --> Router
     Server --> Middleware
-    Router --> Handlers
+    Server -->|createRoutes / routeRequest| Handlers
     
     Jest --> ConsoleReport
     Jest --> HTMLReport
@@ -13437,6 +13860,8 @@ graph TB
     style IntegrationTests fill:#d1ecf1
     style Server fill:#f8d7da
 ```
+
+`server.js` performs routing itself through `createRoutes()`/`routeRequest`; `router.js` is exercised only by its own unit suite because `server.js` does not import it.
 
 **Environment Layers**:
 
@@ -13506,11 +13931,13 @@ graph LR
 
 - **Mock State Isolation**: Each test begins with cleared mock call history
 - **Environment Isolation**: Environment variables restored after tests
-- **Server Isolation**: Integration tests use dedicated server instances
-- **Module Cache Isolation**: `jest.resetModules()` when needed
+- **Server Isolation**: Integration tests use dedicated server instances; `health.test.js` binds ports 3101 and 3102 to avoid the default port 3000
+- **Module Cache Isolation**: `jest.resetModules()` when needed; `jest.isolateModules()` loads the separate failure-path server module in `health.test.js`
 - **No Shared State**: Tests don't share global variables or state
 
 #### 6.6.5.3 Integration Test Server Architecture
+
+**`api.test.js` server lifecycle:**
 
 ```mermaid
 sequenceDiagram
@@ -13544,12 +13971,46 @@ sequenceDiagram
     AfterAll->>TestSuite: Cleanup complete
 ```
 
+**`health.test.js` server lifecycle:**
+
+```mermaid
+sequenceDiagram
+    participant Suite as health.test.js
+    participant Live as Live Server PORT 3101
+    participant Iso as Isolated Server PORT 3102
+    
+    Suite->>Suite: Set PORT 3101, replace logger.logRequest
+    Suite->>Live: serverModule.startServer()
+    Live-->>Suite: Listening
+    Suite->>Live: GET /health
+    Live-->>Suite: 200 application/json {"status":"up"}
+    Suite->>Live: GET /health?probe=1
+    Live-->>Suite: 200 JSON, one log entry /health?probe=1
+    Suite->>Live: POST /health
+    Live-->>Suite: 405 text/plain, Allow GET
+    Suite->>Live: GET /health/
+    Live-->>Suite: 404 Not Found
+    Suite->>Live: GET /hello and POST /hello
+    Live-->>Suite: 200 Hello world, 405 Allow GET
+    Suite->>Live: closeAllConnections() then stopServer()
+    
+    Suite->>Suite: Set PORT 3102, isolateModules + doMock throwing healthHandler
+    Suite->>Iso: isolatedServerModule.startServer()
+    Suite->>Iso: GET /health
+    Iso-->>Suite: 500 Internal Server Error, security headers retained
+    Suite->>Iso: GET /hello
+    Iso-->>Suite: 200 Hello world
+    Suite->>Iso: closeAllConnections() then stopServer()
+    Suite->>Suite: dontMock healthHandler, restore PORT and logRequest
+```
+
 **Single Server Instance Strategy**:
 
 - **Performance**: One startup/shutdown cycle per suite (not per test)
-- **Port Management**: Prevents "EADDRINUSE" errors
+- **Port Management**: Prevents "EADDRINUSE" errors; `health.test.js` uses non-default ports 3101 and 3102
 - **Realistic Testing**: Tests run against actual HTTP server
 - **Resource Efficiency**: Minimal CI/CD resource usage
+- **Hang Prevention**: `closeAllConnections()` before `stopServer()` ensures an unanswered request cannot block shutdown
 
 ### 6.6.6 Test Data Flow
 
@@ -13562,15 +14023,17 @@ flowchart TD
     LoadConstants --> Constants{Constants<br/>Available}
     Constants --> HTTPStatus[HTTP_STATUS<br/>200, 404, 405, 500]
     Constants --> Routes[ROUTES<br/>/hello]
-    Constants --> Messages[MESSAGES<br/>Hello world, Not Found]
+    Constants --> Messages[MESSAGES<br/>Hello world, up, Not Found]
+    Constants --> Headers[HEADERS<br/>text/plain, application/json]
     Constants --> Config[CONFIG<br/>DEFAULT_PORT=3000]
     
     HTTPStatus --> BuildMocks[Build Mock Objects]
     Routes --> BuildMocks
     Messages --> BuildMocks
+    Headers --> BuildMocks
     Config --> BuildMocks
     
-    BuildMocks --> MockReq[Mock Request<br/>method: 'GET'<br/>url: '/hello']
+    BuildMocks --> MockReq[Mock Request<br/>method: 'GET'<br/>url: '/hello' or '/health']
     BuildMocks --> MockRes[Mock Response<br/>statusCode, setHeader, end]
     BuildMocks --> MockEnv[Mock Environment<br/>process.env.PORT]
     
@@ -13587,7 +14050,7 @@ flowchart TD
     Assertions --> AssertStatus[Assert statusCode<br/>using HTTP_STATUS constants]
     Assertions --> AssertHeaders[Assert headers<br/>Content-Type, Allow]
     Assertions --> AssertBody[Assert response body<br/>using MESSAGES constants]
-    Assertions --> AssertMockCalls[Assert mock function calls<br/>verify logger.info called]
+    Assertions --> AssertMockCalls[Assert mock function calls<br/>verify logger and handle405 calls]
     
     AssertStatus --> Result{All<br/>Assertions<br/>Pass?}
     AssertHeaders --> Result
@@ -13628,7 +14091,7 @@ flowchart TD
     LoadConstants --> PrepareRequest[Prepare HTTP Request<br/>using Supertest]
     
     PrepareRequest --> HTTPMethod[Set Method: GET/POST/DELETE]
-    PrepareRequest --> HTTPPath[Set Path: /hello or /unknown]
+    PrepareRequest --> HTTPPath[Set Path: /hello, /health,<br/>/health/ or /unknown]
     PrepareRequest --> HTTPHeaders[Set Headers: if needed]
     
     HTTPMethod --> SendRequest[Send HTTP Request<br/>request server instance]
@@ -13641,19 +14104,22 @@ flowchart TD
     Middleware --> RequestLogger[Log Request Details]
     Middleware --> SecurityHeaders[Apply Security Headers]
     
-    SecurityHeaders --> RouterMatch[Router Matches Path]
+    SecurityHeaders --> RouterMatch[routeRequest: Exact<br/>Pathname Lookup]
     
     RouterMatch --> RouteFound{Route<br/>Exists?}
     
-    RouteFound -->|Yes| MethodCheck{Method<br/>Allowed?}
+    RouteFound -->|Yes| MethodCheck{Method<br/>GET?}
     RouteFound -->|No| NotFoundHandler[404 Handler Executes]
     
-    MethodCheck -->|Yes| HelloHandler[Hello Handler Executes]
-    MethodCheck -->|No| MethodNotAllowedHandler[405 Handler Executes]
+    MethodCheck -->|Yes| RouteHandler[Hello or Health<br/>Handler Executes]
+    MethodCheck -->|No| MethodNotAllowedHandler[405 Handler Executes<br/>handle405]
     
-    HelloHandler --> GenerateResponse[Generate Response<br/>statusCode, headers, body]
+    RouteHandler --> HandlerThrows{Handler<br/>Throws?}
+    HandlerThrows -->|No| GenerateResponse[Generate Response<br/>statusCode, headers, body]
+    HandlerThrows -->|Yes| ServerErrorHandler[500 Handler Executes<br/>handleServerError]
     NotFoundHandler --> GenerateResponse
     MethodNotAllowedHandler --> GenerateResponse
+    ServerErrorHandler --> GenerateResponse
     
     GenerateResponse --> SendResponse[Send Response to Client]
     
@@ -13665,7 +14131,7 @@ flowchart TD
     ChainAssertions --> AssertContentType[.expect 'Content-Type']
     ChainAssertions --> AssertHeaders[.expect Security Headers]
     
-    AssertStatus --> BodyAssertion[Assert Response Body<br/>expect response.text to equal MESSAGES]
+    AssertStatus --> BodyAssertion[Assert Response Body<br/>MESSAGES text or JSON status up]
     AssertContentType --> BodyAssertion
     AssertHeaders --> BodyAssertion
     
@@ -13678,7 +14144,7 @@ flowchart TD
     TestFail --> MoreTests
     
     MoreTests -->|Yes| PrepareRequest
-    MoreTests -->|No| Shutdown[afterAll: Stop Server<br/>await stopServer]
+    MoreTests -->|No| Shutdown[afterAll: closeAllConnections<br/>then await stopServer]
     
     Shutdown --> ServerStopped{Server<br/>Stopped?}
     ServerStopped -->|Yes| EndSuccess[Suite Complete]
@@ -13697,6 +14163,8 @@ flowchart TD
     style EndSuccess fill:#d4edda
     style EndFail fill:#f8d7da
 ```
+
+The handler-throws branch is exercised by the isolated PORT 3102 server in `health.test.js`; `closeAllConnections()` before `stopServer()` is the `health.test.js` shutdown sequence.
 
 **Data Flow Characteristics**:
 
@@ -13890,13 +14358,18 @@ module.exports = { main, startServer, stopServer };
 
 #### Files Examined
 
-- `src/backend/jest.config.js` - Complete Jest configuration with coverage thresholds, reporters, and test patterns
+- `src/backend/jest.config.js` - Complete Jest configuration with coverage thresholds (`coverageThreshold` global, `./handlers/hello.js`, `./handlers/error.js`), reporters, and test patterns
 - `src/backend/__tests__/setup.js` - Global test setup with console and logger mocking, timeout configuration
 - `src/backend/__tests__/integration/api.test.js` - Complete integration test suite with Supertest, server lifecycle management
-- `src/backend/__tests__/handlers/hello.test.js` - Unit test examples demonstrating mocking patterns and assertions
+- `src/backend/__tests__/integration/health.test.js` - `/health` live-pipeline integration suite (PORT 3101) and isolated throwing-handler suite (PORT 3102); `closeAllConnections()` before `stopServer()`
+- `src/backend/__tests__/handlers/healthHandler.test.js` - `/health` handler unit tests (GET 200 JSON, query string, `it.each` POST/PUT/DELETE/HEAD → `handle405`, error propagation)
+- `src/backend/__tests__/handlers/helloHandler.test.js` - `/hello` handler unit tests
+- `src/backend/__tests__/handlers/hello.test.js` - Unit test examples demonstrating mocking patterns and assertions (requires the missing `handlers/hello` module)
+- `src/backend/__tests__/utils/constants.test.js` - Constants validation, including `HEALTH_STATUS_UP` and `CONTENT_TYPE_JSON`
+- `src/backend/handlers/healthHandler.js` - `/health` handler under test
 - `src/backend/nodemon.json` - Development watch configuration with test file exclusion
 - `CONTRIBUTING.md` - Test execution commands, branch naming conventions, testing requirements for contributions
-- `package.json` - Root package manifest (minimal content for project structure)
+- `package.json` - Root package manifest (minimal content for project structure; no test script)
 
 #### Folders Explored
 
@@ -13916,13 +14389,14 @@ module.exports = { main, startServer, stopServer };
 - **Section 4.6 Testing Workflow** - Complete test execution flow diagram, test categories, test commands, and output artifacts
 - **Section 3.4 Open Source Dependencies** - Jest framework details, Supertest integration testing, jest-junit CI reporting, npm package management
 - **Section 1.2 System Overview** - System context, success criteria including test coverage KPIs, architectural simplicity justifying testing approach
+- **Section 5.2.5 Handler Components** - `helloHandler.js` and `healthHandler.js` behavior under test
 
 #### Infrastructure Scripts Referenced
 
-- `infrastructure/scripts/health-check.sh` - Deployment verification with health check endpoint validation
+- `infrastructure/scripts/health-check.sh` - Deployment verification with health check endpoint validation (probes `/hello`)
 - `infrastructure/scripts/deploy.sh` - Deployment workflow with health check retry logic (5 attempts, 3-second intervals)
 - `infrastructure/scripts/setup.sh` - Environment setup validation including port availability checks
-- `infrastructure/local/docker-compose.yml` - Docker health check configuration for service readiness verification
+- `infrastructure/local/docker-compose.yml` - Docker health check configuration for service readiness verification (probes `/hello`)
 
 # 7. User Interface Design
 
@@ -13974,7 +14448,7 @@ All components in the codebase serve backend HTTP request processing functions w
 
 ### 7.2.1 Programmatic HTTP Client Access
 
-Users interact with the Node.js Hello World Service programmatically through standard HTTP client tools and libraries rather than through a dedicated graphical user interface. The service exposes a single REST endpoint that responds to HTTP GET requests with plain text responses.
+Users interact with the Node.js Hello World Service programmatically through standard HTTP client tools and libraries rather than through a dedicated graphical user interface. The service exposes two REST endpoints that respond to HTTP GET requests: `/hello`, which returns the plain text greeting "Hello world" (`text/plain`), and `/health`, a liveness endpoint that returns the JSON document `{"status":"up"}` (`application/json`).
 
 ### 7.2.2 Supported Access Patterns
 
@@ -13986,7 +14460,9 @@ Users can access the service using command-line tools that make HTTP requests:
 - **wget**: `wget -qO- http://localhost:3000/hello`
 - **HTTPie**: `http GET http://localhost:3000/hello`
 
-These tools send HTTP GET requests to the `/hello` endpoint and display the plain text response "Hello world" in the terminal.
+These tools send HTTP GET requests to the `/hello` endpoint and display the plain text response "Hello world" in the terminal. The same tools query the liveness endpoint:
+
+- **curl**: `curl http://localhost:3000/health` prints `{"status":"up"}`
 
 **HTTP Client Libraries:**
 
@@ -14028,19 +14504,33 @@ Users can access the service endpoint directly through web browsers by navigatin
 | Status Code | 200 OK |
 | Character Encoding | UTF-8 |
 
+**Health Endpoint:**
+
+| Property | Value |
+|---|---|
+| HTTP Method | GET |
+| URL Path | `/health` |
+| Response Format | JSON |
+| Response Body | `{"status":"up"}` |
+| Content-Type | application/json |
+| Status Code | 200 OK |
+| Intended Consumers | Liveness probes and uptime monitors |
+
+The health response is a pure liveness signal built per request from `MESSAGES.HEALTH_STATUS_UP`; it carries no dependency, uptime, or version data. The path must match exactly: a query string is ignored (`/health?probe=1` returns the same response) and `/health/` returns 404.
+
 **Response Characteristics:**
 
-The endpoint returns a static plain text string without HTML markup, JSON structure, or any formatting that would require client-side rendering logic. The response is immediately consumable by any HTTP client without parsing or transformation requirements.
+The `/hello` endpoint returns a static plain text string without HTML markup, JSON structure, or any formatting that would require client-side rendering logic. The `/health` endpoint returns a fixed single-field JSON object. Both responses are immediately consumable by any HTTP client.
 
 **Error Responses:**
 
 The service returns standard HTTP error responses for invalid requests:
 
-- **404 Not Found**: Requests to non-existent paths return plain text "Not Found"
-- **405 Method Not Allowed**: Non-GET requests to `/hello` return error with `Allow: GET` header
+- **404 Not Found**: Requests to paths other than exactly `/hello` or `/health` return plain text "Not Found"
+- **405 Method Not Allowed**: Non-GET requests to `/hello` or `/health` return "Method Not Allowed" with an `Allow: GET` header
 - **500 Internal Server Error**: Server errors return generic error message without implementation details
 
-All error responses use plain text format (`Content-Type: text/plain`) maintaining consistency with the service's text-based interface approach.
+All error responses use plain text format (`Content-Type: text/plain`); only the successful `/health` response uses JSON.
 
 ## 7.3 Operational Monitoring Interface
 
@@ -14085,7 +14575,7 @@ The Grafana dashboard is explicitly **not** an end-user application interface. I
 
 **Current State:**
 
-The monitoring infrastructure is fully provisioned with Prometheus configuration and Grafana dashboard definitions in place. However, the application does not currently expose `/metrics` or `/health` endpoints required for complete observability functionality. Full metrics collection requires implementing instrumentation using the `prom-client` library to expose Prometheus-compatible metrics.
+The monitoring infrastructure is fully provisioned with Prometheus configuration and Grafana dashboard definitions in place. The application does not expose a `/metrics` endpoint, and full metrics collection requires instrumentation with the `prom-client` library to expose Prometheus-compatible metrics. The `/health` endpoint exists, but it returns `application/json` `{"status":"up"}`, which is not Prometheus exposition format. The `hello-world-health` scrape job therefore records `up{job="hello-world-health"} = 0`, and the Grafana panels built on it (such as "Health Check Status") report the service down until a compatible probe, such as a blackbox-style HTTP check, is configured.
 
 **Future Instrumentation:**
 
@@ -14146,10 +14636,10 @@ Users discover the service endpoint through documentation (README.md, Technical 
 
 **Source Code Structure:**
 - `src/backend/` - Backend-only implementation directory; no frontend counterpart exists
-- `src/backend/handlers/` - Server-side HTTP request handlers (hello.js, notFound.js, methodNotAllowed.js)
-- `src/backend/middleware/` - Backend request processing middleware (requestLogger.js, securityHeaders.js)
-- `src/backend/server.js` - HTTP server implementation using native Node.js http module
-- `src/backend/router.js` - Server-side request routing logic
+- `src/backend/handlers/` - Server-side HTTP request handlers (`helloHandler.js` for `/hello`, `healthHandler.js` for `/health`, `error.js` for 404/500 responses)
+- `src/backend/middleware/` - Backend request processing middleware (`index.js`: `requestLogger`, `securityHeaders`, `applyMiddleware`)
+- `src/backend/server.js` - HTTP server implementation using native Node.js http module; routes `/hello` and `/health` via `createRoutes()`
+- `src/backend/router.js` - Server-side request routing logic (not imported by `server.js`)
 - `src/backend/index.js` - Application entry point and lifecycle management
 
 **Infrastructure Configuration:**
@@ -14158,7 +14648,7 @@ Users discover the service endpoint through documentation (README.md, Technical 
 - `docker-compose.yml` - Service orchestration configuration including monitoring stack
 
 **Documentation:**
-- `README.md` - Project description confirming backend HTTP REST API service with single endpoint
+- `README.md` and `src/backend/README.md` - Project description confirming a backend HTTP REST API service with two endpoints (`/hello` and `/health`), including a `GET /health` API section
 - Technical Specifications - Comprehensive documentation of backend-only architecture and explicit UI scope exclusion
 
 ### 7.5.3 Search and Analysis Methods
@@ -14846,9 +15336,11 @@ The deployment script includes placeholder logic for registry push:
 # Future: Push to registry
 
 #### if [ "$ENVIRONMENT" = "production" ]; then
+
 ####   docker push ${IMAGE_NAME}:${VERSION}
 
 #### fi
+
 ```
 
 ### 8.4.5 Build Optimization Techniques
@@ -15538,9 +16030,11 @@ npm install
 #### Includes:
 
 #### - jest (testing framework)
+
 #### - jest-junit (CI test reporter)
 
 #### - eslint (linting)
+
 #### - nodemon (development hot reload)
 
 ```
@@ -15550,11 +16044,13 @@ npm install
 # Clean install from package-lock.json
 
 #### Excludes devDependencies
+
 npm ci --only=production
 
 #### Includes only:
 
 #### - dotenv (configuration management)
+
 #### - No framework dependencies (native Node.js only)
 
 ```
@@ -16079,17 +16575,19 @@ The infrastructure implements a **hybrid monitoring approach** combining fully f
 | Component | Status | Purpose | Location |
 |---|---|---|------|
 | **Console Logging** | ✅ Fully Functional | Real-time request/response/error logging | `src/backend/utils/logger.js` |
-| **Docker Health Checks** | ✅ Fully Functional | Container-level availability monitoring | `docker-compose.yml` healthcheck |
-| **Health Check Script** | ✅ Fully Functional | Programmatic deployment validation | `infrastructure/scripts/health-check.sh` |
+| **Docker Health Checks** | ✅ Fully Functional | Container-level availability monitoring (probes `/hello`) | `docker-compose.yml` healthcheck |
+| **Health Check Script** | ✅ Fully Functional | Programmatic deployment validation (probes `/hello`) | `infrastructure/scripts/health-check.sh` |
 | **Prometheus Configuration** | ⚠️ Provisioned | Metrics collection configuration (3 scrape jobs) | `infrastructure/monitoring/prometheus.yml` |
 
 | Component | Status | Purpose | Location |
 |---|---|---|------|
 | **Grafana Dashboard** | ⚠️ Provisioned | Visualization dashboard (13 panels) | `infrastructure/monitoring/grafana-dashboard.json` |
 | **Metrics Endpoint** | ❌ Not Implemented | Application metrics exposure | `/metrics` endpoint missing |
-| **Health Endpoint** | ❌ Not Implemented | Dedicated health endpoint | `/health` endpoint missing |
+| **Health Endpoint** | ⚠️ Endpoint Implemented, Scrape Non-Functional | Dedicated liveness endpoint: `GET /health` returns `200` `application/json` `{"status":"up"}`; the body is not Prometheus exposition format, so the `hello-world-health` scrape records `up = 0` | `src/backend/handlers/healthHandler.js` |
 | **Prometheus Container** | ❌ Not Deployed | Metrics collection server | Not in `docker-compose.yml` |
 | **Grafana Container** | ❌ Not Deployed | Metrics visualization server | Not in `docker-compose.yml` |
+
+The Docker Compose healthcheck still probes `/hello` (`curl -f http://localhost:3000/hello`), not the dedicated `/health` endpoint.
 
 **Evidence**: Monitoring architecture documented in Section 6.5, with implementation status in Section 6.5.1.1.
 
@@ -16183,8 +16681,10 @@ The provisioned configuration defines three scrape jobs for comprehensive metric
   scrape_timeout: 5s
   static_configs:
     - targets: ['hello-world-app:3000']
-  metrics_path: '/health'            # ❌ NOT IMPLEMENTED
+  metrics_path: '/health'            # ⚠️ IMPLEMENTED, but returns JSON (not exposition format) -> up=0
 ```
+
+The application serves `GET /health` with `200 OK`, `Content-Type: application/json` and `{"status":"up"}`. Prometheus cannot parse that body as exposition format, so the scrape fails and `up{job="hello-world-health"}` stays 0 until the job becomes a blackbox-style HTTP probe or the endpoint emits exposition format. The Docker Compose healthcheck does not use this endpoint; it still probes `/hello`.
 
 **Scrape Job 3: Prometheus Self-Monitoring**
 ```yaml
@@ -17307,11 +17807,11 @@ targets: ['hello-world-app:3000']
 - **30-second Health Checks**: Reduces overhead while providing sufficient health status granularity for alerting
 
 **Implementation Status**:
-⚠️ The `/metrics` and `/health` endpoints are **not currently implemented** in the application. Prometheus configuration is provisioned for future observability enhancement. Implementation would require:
+⚠️ The `/metrics` endpoint is **not currently implemented** in the application. The `/health` endpoint is implemented (`src/backend/handlers/healthHandler.js`) and returns `200 OK` with `application/json` `{"status":"up"}`, but that body is not Prometheus exposition format, so the `hello-world-health` job records `up{job="hello-world-health"} = 0`. Prometheus configuration is provisioned for future observability enhancement. Implementation would require:
 1. Install `prom-client` npm package
 2. Create metrics registry and collectors in application code
 3. Expose `/metrics` endpoint returning Prometheus text format
-4. Expose `/health` endpoint returning 200 OK or appropriate error status
+4. Convert the `hello-world-health` job to a blackbox-style HTTP probe of `/health`, or have `/health` emit exposition format
 
 **Evidence**: Prometheus configuration in `infrastructure/monitoring/prometheus.yml` with two scrape jobs and different intervals
 
@@ -17397,11 +17897,14 @@ Centralizing route definitions enables:
 - Route reuse across handlers, tests, and documentation
 - Future expansion to additional endpoints
 
+`ROUTES` still defines only `HELLO`; there is no `/health` route constant. `server.js` `createRoutes()` registers both paths as literal keys (`'/hello'` and `'/health'`).
+
 #### 9.1.7.3 Response Messages
 
 ```javascript
 MESSAGES: {
   HELLO_RESPONSE: 'Hello world',
+  HEALTH_STATUS_UP: 'up',
   NOT_FOUND: 'Not Found',
   METHOD_NOT_ALLOWED: 'Method Not Allowed',
   SERVER_ERROR: 'Internal Server Error',
@@ -17415,6 +17918,8 @@ Centralizing response messages provides:
 - Easy A/B testing of message variations
 - Single location for message updates
 
+`HEALTH_STATUS_UP` supplies the `status` value of the `/health` body, serialized per request as `JSON.stringify({ status: MESSAGES.HEALTH_STATUS_UP })`.
+
 **Template String Usage**:
 The `SERVER_STARTED` message uses printf-style formatting (`%d`) for dynamic port injection, replaced using `util.format()` or string interpolation at runtime.
 
@@ -17422,7 +17927,7 @@ The `SERVER_STARTED` message uses printf-style formatting (`%d`) for dynamic por
 
 #### 9.1.7.4 Security Header Values
 
-The `src/backend/middleware/index.js` file defines security header values as constants:
+The `securityHeaders` middleware in `src/backend/middleware/index.js` sets the following header values on every response:
 
 ```javascript
 SECURITY_HEADERS: {
@@ -17432,9 +17937,24 @@ SECURITY_HEADERS: {
 }
 ```
 
-These headers are applied to every response via the `securityHeaders` middleware as documented in Section 5.4.3. The strict CSP policy (`default-src 'none'`) reflects the plain-text-only response strategy with no resource loading requirements.
+These headers are applied to every response via the `securityHeaders` middleware as documented in Section 5.4.3. The strict CSP policy (`default-src 'none'`) reflects a response strategy with no resource loading requirements; it applies equally to the plain-text responses and the `/health` JSON response.
 
-**Evidence**: Security header constants in `src/backend/middleware/index.js` applied via securityHeaders middleware
+**Evidence**: `res.setHeader` calls in the `securityHeaders` function of `src/backend/middleware/index.js`
+
+#### 9.1.7.5 Header Names and Content Types
+
+```javascript
+HEADERS: {
+  CONTENT_TYPE: 'Content-Type',
+  CONTENT_TYPE_TEXT: 'text/plain',
+  CONTENT_TYPE_JSON: 'application/json',
+  ALLOW: 'Allow'
+}
+```
+
+`CONTENT_TYPE_TEXT` is used by the `/hello` handler and all error responses; `CONTENT_TYPE_JSON` is used only by the `/health` handler. `ALLOW` carries the `Allow: GET` header on 405 responses.
+
+**Evidence**: `HEADERS` definition in `src/backend/utils/constants.js`, asserted in `src/backend/__tests__/utils/constants.test.js`
 
 ### 9.1.8 Test Coverage Threshold Specifications
 
@@ -17463,7 +17983,7 @@ coverageThreshold: {
 
 #### 9.1.8.2 Per-File Coverage Thresholds
 
-More stringent requirements for critical files:
+More stringent requirements for critical files, as configured:
 
 ```javascript
 coverageThreshold: {
@@ -17483,8 +18003,10 @@ coverageThreshold: {
 ```
 
 **Rationale for Stricter Thresholds**:
-- **hello.js**: Core business logic, must have complete test coverage
+- **hello.js**: Intended for the core business logic handler, requiring complete test coverage
 - **error.js**: Error handling paths are critical for reliability, near-complete coverage required
+
+**Key Mismatch**: The `'./handlers/hello.js'` key matches no file; the hello handler is `handlers/helloHandler.js`. Jest reports `Coverage data for ./handlers/hello.js was not found.`, and `helloHandler.js` and `healthHandler.js` fall under the global thresholds only. Current measured results are listed in Section 6.6.4.6.
 
 **Coverage Metrics Definitions**:
 - **Branches**: Percentage of conditional branches (if/else, switch cases, ternary operators) executed
@@ -17558,7 +18080,7 @@ These flags enable environment-specific behavior throughout the codebase:
 
 **Alpine Linux**: A security-oriented, lightweight Linux distribution based on musl libc and BusyBox, typically 5-10 MB in size. Used as the base for the Docker image (`node:18-alpine`) to minimize container size and reduce attack surface by including only essential system packages.
 
-**API (Application Programming Interface)**: A set of definitions and protocols for building and integrating application software. This service exposes a simple REST API with a single `/hello` endpoint that returns plain text responses.
+**API (Application Programming Interface)**: A set of definitions and protocols for building and integrating application software. This service exposes a simple REST API with two endpoints: `/hello`, which returns plain text, and `/health`, a liveness endpoint that returns the JSON document `{"status":"up"}`.
 
 **Bind Mount**: A Docker volume type that maps a host filesystem path directly to a container path, enabling real-time code synchronization during development. Used in Docker Compose to mount `src/backend` to `/app` for live code updates without rebuilding images.
 
@@ -17572,7 +18094,7 @@ These flags enable environment-specific behavior throughout the codebase:
 
 **CORS (Cross-Origin Resource Sharing)**: A mechanism that allows restricted resources on a web page to be requested from another domain outside the domain from which the resource originated. Not currently implemented as the service does not serve browser applications or require cross-origin access.
 
-**CSP (Content Security Policy)**: An HTTP security header that helps prevent cross-site scripting (XSS) attacks by specifying which dynamic resources are allowed to load. Set to `default-src 'none'` in this service, blocking all resource loading (appropriate for plain text responses).
+**CSP (Content Security Policy)**: An HTTP security header that helps prevent cross-site scripting (XSS) attacks by specifying which dynamic resources are allowed to load. Set to `default-src 'none'` in this service, blocking all resource loading (appropriate for the plain text and JSON responses).
 
 **DDoS (Distributed Denial of Service)**: An attack where multiple compromised systems are used to target a single system, causing a denial of service for legitimate users. The application has no DDoS protection implemented; mitigation would require rate limiting middleware or cloud-based DDoS protection services.
 
@@ -17582,7 +18104,7 @@ These flags enable environment-specific behavior throughout the codebase:
 
 **Graceful Shutdown**: A process of cleanly stopping a server by finishing in-flight requests, closing connections, and releasing resources before terminating. Implemented with SIGINT/SIGTERM signal handlers and a 10-second timeout for connection draining.
 
-**Health Check**: A mechanism to verify that a service is running correctly and able to handle requests. Implemented at three levels: Docker container health checks, Prometheus health scraping (configured but endpoint not implemented), and deployment validation scripts.
+**Health Check**: A mechanism to verify that a service is running correctly and able to handle requests. The application provides a dedicated `GET /health` endpoint returning `200 OK` with `{"status":"up"}`. Checks run at three levels: Docker container health checks and deployment validation scripts (both probe `/hello`), and Prometheus health scraping of `/health`, which cannot parse the JSON body as exposition format and records `up = 0`.
 
 **Horizontal Scaling**: Adding more instances of a service to distribute load, as opposed to vertical scaling (adding resources to a single instance like CPU or RAM). The stateless design enables unlimited horizontal scaling with load balancers distributing traffic.
 
@@ -17596,7 +18118,7 @@ These flags enable environment-specific behavior throughout the codebase:
 
 **JWT (JSON Web Token)**: A compact, URL-safe means of representing claims to be transferred between two parties, typically for authentication. Mentioned as a future authentication option but not currently implemented as the service has no protected endpoints.
 
-**Liveness Probe**: In container orchestration systems, a check to determine if a container is still running and should be restarted if unhealthy. Docker health checks serve this purpose with configurable retry logic and failure thresholds.
+**Liveness Probe**: In container orchestration systems, a check to determine if a container is still running and should be restarted if unhealthy. `GET /health` is the service's dedicated liveness endpoint (pure liveness: no dependency, uptime, or version data). Docker health checks currently serve this purpose by probing `/hello`, with configurable retry logic and failure thresholds.
 
 **LTS (Long-Term Support)**: A product lifecycle management policy where software receives extended support, security updates, and bug fixes for an extended period. Node.js 18.x LTS is the required runtime version with support until April 2025.
 
@@ -17624,7 +18146,7 @@ These flags enable environment-specific behavior throughout the codebase:
 
 **Readiness Probe**: In container orchestration systems, a check to determine if a container is ready to accept traffic. Not explicitly implemented but health checks serve a similar purpose for determining when newly started containers can receive requests.
 
-**REST (Representational State Transfer)**: An architectural style for distributed hypermedia systems emphasizing stateless communication, resource-based URLs, and standard HTTP methods. The `/hello` endpoint follows REST principles with GET method and stateless design.
+**REST (Representational State Transfer)**: An architectural style for distributed hypermedia systems emphasizing stateless communication, resource-based URLs, and standard HTTP methods. The `/hello` and `/health` endpoints follow REST principles with GET method and stateless design.
 
 **Rollback**: The process of reverting to a previous version of software after a failed deployment. Automatically triggered by health check failures in `deploy.sh` which reverts to the `previous` image tag.
 
@@ -17644,7 +18166,7 @@ These flags enable environment-specific behavior throughout the codebase:
 
 **Twelve-Factor App**: A methodology for building software-as-a-service applications emphasizing best practices like configuration via environment variables, dependency isolation, disposability, and dev/prod parity. Followed by the service's configuration approach.
 
-**XSS (Cross-Site Scripting)**: A security vulnerability where attackers inject malicious scripts into web pages viewed by other users. Mitigated with CSP headers (`Content-Security-Policy: default-src 'none'`) and plain text-only responses with no HTML rendering.
+**XSS (Cross-Site Scripting)**: A security vulnerability where attackers inject malicious scripts into web pages viewed by other users. Mitigated with CSP headers (`Content-Security-Policy: default-src 'none'`) and static plain text and JSON responses with no HTML rendering.
 
 ## 9.3 Acronyms
 
@@ -17653,7 +18175,7 @@ These flags enable environment-specific behavior throughout the codebase:
 | Acronym | Full Form | Context in Project |
 |---------|-----------|-------------------|
 | **ALB** | Application Load Balancer | AWS load balancing service mentioned for production deployment scenarios with health check integration |
-| **API** | Application Programming Interface | REST API with single `/hello` endpoint returning plain text responses |
+| **API** | Application Programming Interface | REST API with two endpoints: `/hello` returning plain text and `/health` returning the JSON liveness document `{"status":"up"}` |
 | **CD** | Continuous Delivery/Deployment | Automated deployment pipeline for building, testing, and deploying code changes |
 | **CI** | Continuous Integration | Automated testing and validation pipeline triggered on code commits |
 | **CMD** | Command | Docker CMD instruction specifying container startup command; also used in health check test commands |
@@ -17669,13 +18191,13 @@ These flags enable environment-specific behavior throughout the codebase:
 | **ES2022** | ECMAScript 2022 | JavaScript language specification version; ES modules not used (CommonJS instead) |
 | **ESLint** | JavaScript Linting Utility | Code quality and style checking tool mentioned in contribution guidelines |
 | **GC** | Garbage Collection | JavaScript automatic memory management process; GC pauses can cause latency spikes |
-| **GET** | HTTP GET Method | HTTP method for retrieving resources; only method supported by `/hello` endpoint |
-| **HTML** | HyperText Markup Language | Not used in responses (plain text only) to simplify security and avoid XSS risks |
+| **GET** | HTTP GET Method | HTTP method for retrieving resources; only method supported by the `/hello` and `/health` endpoints |
+| **HTML** | HyperText Markup Language | Not used in responses (plain text and JSON only) to simplify security and avoid XSS risks |
 | **HTTP** | HyperText Transfer Protocol | Communication protocol used by service; HTTP/1.1 specifically (not HTTP/2) |
 | **HTTPS** | HTTP Secure | TLS-encrypted HTTP (not implemented in application, expected at load balancer or reverse proxy) |
 | **I/O** | Input/Output | System operations for reading/writing data (minimal in this service with no database or file operations) |
 | **ISO** | International Organization for Standardization | ISO 8601 timestamp format used for all log entries |
-| **JSON** | JavaScript Object Notation | Data format used in configuration files (package.json, jest.config.js, docker-compose.yml) but not API responses |
+| **JSON** | JavaScript Object Notation | Data format used in configuration files (package.json, jest.config.js, docker-compose.yml) and in the `/health` response body (`{"status":"up"}`); all other API responses are plain text |
 | **JWT** | JSON Web Token | Token-based authentication standard mentioned for future authentication option |
 | **KPI** | Key Performance Indicator | Performance metrics and targets for measuring service health and quality |
 | **LTS** | Long-Term Support | Node.js 18.x LTS version with extended support and security updates until April 2025 |
@@ -17701,7 +18223,7 @@ These flags enable environment-specific behavior throughout the codebase:
 | **SLA** | Service Level Agreement | Service availability and performance guarantees (none documented for this educational project) |
 | **SQL** | Structured Query Language | Database query language (not applicable, no database used) |
 | **TLS** | Transport Layer Security | Encryption protocol for secure communication (not implemented in application, expected at infrastructure layer) |
-| **URL** | Uniform Resource Locator | Web address format; only `/hello` URL path implemented |
+| **URL** | Uniform Resource Locator | Web address format; only the `/hello` and `/health` URL paths are implemented (exact match) |
 | **UUID** | Universally Unique Identifier | 128-bit unique identifier; used for Grafana dashboard UID (`hello-world-dashboard`) |
 | **XML** | eXtensible Markup Language | Data format used for JUnit test reports (`coverage/junit/junit.xml`) generated by jest-junit |
 | **XSS** | Cross-Site Scripting | Web security vulnerability involving script injection (mitigated with CSP headers and plain text responses) |
@@ -17717,30 +18239,39 @@ The following files were directly examined to compile this Technical Specificati
 **Root Configuration Files**:
 - `hao-backprop-test-main (1)/hao-backprop-test-main/package.json` - Package metadata, dependencies, scripts, author, and license information
 - `hao-backprop-test-main (1)/hao-backprop-test-main/LICENSE` - Complete MIT License text with copyright notice
-- `hao-backprop-test-main (1)/hao-backprop-test-main/README.md` - Project overview, setup instructions, usage documentation, and feature descriptions
+- `hao-backprop-test-main (1)/hao-backprop-test-main/README.md` - Project overview, setup instructions, usage documentation, and feature descriptions (two endpoints, `GET /health` API section)
 - `hao-backprop-test-main (1)/hao-backprop-test-main/CONTRIBUTING.md` - Contribution guidelines including branch naming and commit message conventions
 - `hao-backprop-test-main (1)/hao-backprop-test-main/Dockerfile` - Production container image build configuration
 - `hao-backprop-test-main (1)/hao-backprop-test-main/package-lock.json` - Dependency lock file for deterministic installations
 
 **Source Code Files**:
 - `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/index.js` - Server initialization and graceful shutdown implementation
-- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/server.js` - HTTP server creation and lifecycle management
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/server.js` - HTTP server creation, lifecycle management, and routing (`createRoutes()` maps `/hello` and `/health`)
 - `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/config.js` - Environment variable configuration and validation
-- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/handlers/hello.js` - Hello endpoint request handler
-- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/handlers/error.js` - Error handling functions for 404, 405, and 500 responses
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/handlers/helloHandler.js` - `/hello` endpoint request handler (`handleHelloRequest`)
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/handlers/healthHandler.js` - `/health` liveness endpoint handler (`handleHealthRequest`, 200 `application/json` `{"status":"up"}`)
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/handlers/error.js` - Error handling functions for 404 and 500 responses
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/errorHandler.js` - Centralized error responses (`handle404`, `handle405` with `Allow: GET`)
 - `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/middleware/index.js` - Request logging and security headers middleware
-- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/utils/constants.js` - Application constants (HTTP status codes, routes, messages)
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/utils/constants.js` - Application constants (HTTP status codes, routes, messages including `HEALTH_STATUS_UP`, headers including `CONTENT_TYPE_JSON`)
 - `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/utils/logger.js` - Centralized logging utility with level support
+
+**Backend Documentation**:
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/README.md` - Backend service documentation describing both endpoints and the `GET /health` API
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/CHANGELOG.md` - Unreleased entries: added `GET /health`; fixed the `server.js` hello-handler import
 
 **Test Configuration and Files**:
 - `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/jest.config.js` - Jest testing framework configuration with coverage thresholds
-- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/setup.js` - Global test setup for console spies and configuration
-- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/__tests__/unit/handlers/hello.test.js` - Hello handler unit tests
-- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/__tests__/unit/handlers/error.test.js` - Error handler unit tests
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/__tests__/setup.js` - Global test setup for console spies and configuration
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/__tests__/handlers/helloHandler.test.js` - Hello handler unit tests
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/__tests__/handlers/healthHandler.test.js` - Health handler unit tests
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/__tests__/handlers/error.test.js` - Error handler unit tests
 - `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/__tests__/integration/api.test.js` - Integration tests using Supertest
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/__tests__/integration/health.test.js` - `/health` live-pipeline integration tests using Supertest
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/__tests__/utils/constants.test.js` - Constants validation tests
 
 **Development Configuration**:
-- `hao-backprop-test-main (1)/hao-backprop-test-main/nodemon.json` - Nodemon configuration for development hot reload
+- `hao-backprop-test-main (1)/hao-backprop-test-main/src/backend/nodemon.json` - Nodemon configuration for development hot reload
 
 **Infrastructure Files**:
 - `hao-backprop-test-main (1)/hao-backprop-test-main/infrastructure/local/docker-compose.yml` - Local development Docker Compose orchestration

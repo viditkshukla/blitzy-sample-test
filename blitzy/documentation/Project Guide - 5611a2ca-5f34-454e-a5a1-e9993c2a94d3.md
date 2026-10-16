@@ -2,44 +2,44 @@
 
 ## 1.1 Project Overview
 
-A small Node.js HTTP service — no framework, no datastore — answers `GET /hello` with `Hello world` and `GET /health` with its status. This work restructured the `/hello` handler into guard-clause form: non-GET requests leave through an early return and the GET path sits flat. Every observable behaviour is unchanged — the export, the response writes, the delegation to the shared 405 writer, and the log text, levels and order — and a 30-case characterisation suite pins it, its two helpers documented in the repository's own JSDoc shape.
+A small Node.js HTTP service — no framework, no datastore — answers `GET /hello` with `Hello world` and `GET /health` with its status. This work restructured the `/hello` handler into guard-clause form: a non-GET request logs, delegates to the shared 405 writer and returns early, while the GET path sits flat beneath it. Every externally observable behaviour is unchanged — the export surface, the response writes, the delegation, and the log text, levels and order — and a 30-case characterisation suite pins it, its two helpers documented in the repository's own JSDoc shape.
 
 ## 1.2 Completion Status
 
-**51.1% complete** — 47 of 92 hours delivered. Completed hours: Dark Blue (#5B39F3); remaining hours: White (#FFFFFF).
+**52.8% complete** — 47 of 89 hours delivered. Completed hours: Dark Blue (#5B39F3); remaining hours: White (#FFFFFF).
 
 ```mermaid
-pie title Project Hours Breakdown (51.1 percent complete)
+pie title Project Hours Breakdown (52.8 percent complete)
     "Completed Work" : 47
-    "Remaining Work" : 45
+    "Remaining Work" : 42
 ```
 
 | Metric | Hours |
 |---|---|
-| Total Hours | 92 |
+| Total Hours | 89 |
 | Completed Hours (AI + Manual) | 47 |
-| Remaining Hours | 45 |
+| Remaining Hours | 42 |
 
-47 ÷ 92 = **51.1%**, all autonomous delivery work. The delivered capability is complete and verified; the residual hours are the repository's release-readiness work plus one withheld change awaiting a decision.
+47 ÷ 89 = **52.8%**. The delivered capability is complete and verified; the 42 residual hours are the repository's release-readiness work around it.
 
 ## 1.3 Key Accomplishments
 
 - `/hello` restructured to a guard clause: 47 lines, GET path un-nested (`src/backend/handlers/helloHandler.js`).
-- Ten restating comments and three whitespace-only lines removed; header, JSDoc and every needed statement byte-identical.
-- 27 characterisation cases added to the suite's 30, pinning call order, fourteen guarded method-value classes, the `TypeError` before any side effect, error propagation, return discipline, the export surface and the two-read method contract.
-- Both test helpers now carry JSDoc, and every characterisation marker names a reason instead of restating its title.
+- Ten restating comments and three whitespace-only lines removed; header, JSDoc, imports, helper and every needed statement byte-identical.
+- 27 characterisation cases joined the suite's 30, pinning call order, fourteen guarded method-value classes, the missing-request failure, error propagation, return discipline, the export surface and the two-read method contract.
+- Both test helpers carry JSDoc, and every characterisation marker names a reason instead of restating its title.
 - The test edit is append-only — first 137 lines byte-identical, 211 inserted, 0 deleted — two files changed, both manifests untouched, no dependency added.
-- Verified live end to end with the handler at 100% coverage; the pre-change tree through the same gate confirms 27 more passing tests and no failure.
+- Verified live end to end, with the handler at 100% coverage; the pre-change tree through the same gate confirms 27 more passing tests and no failure.
 
 ## 1.4 Critical Unresolved Issues
 
-**10 of the 30 tracked items remain open**: 8 defects reported rather than repaired, 1 withheld structural change and 1 delivery-automation gap. Of the 21 scoped clauses, 20 are delivered and 1 is withheld.
+**10 of the 30 tracked items remain open** — 8 repository defects left in place by instruction, 1 delivery-automation gap, and 1 accepted exception that carries no work.
 
 | Issue | Impact | Owner | ETA |
 |---|---|---|---|
-| Withheld structural change: the redundant `method` local is retained because removing it cannot be shown equivalent (1 item) | The requested simplification is not in the tree; needs a decision on whether getter-backed requests are in contract | Maintainer / product owner | 3h once decided |
-| Pre-existing defects left in place (8 items): a suite requiring a module that does not exist; the missing backend manifest that stops the container image building; two coverage-threshold keys naming no file; a test reporter configured but declared in no manifest; the API integration suite unable to reach the handler; a setup file that never loads; the documented lint configuration absent; an over-length log line | Two block release outright — the image cannot build and the API integration suite cannot run — and the reporter gap stops a clean checkout running the suite at all | Repository owner | 3–19h per item, see Section 2.2 |
-| No continuous integration or deployment automation (1 item) | Releases depend on manual steps, and a red gate cannot be attributed to a change | Repository owner | 4–8h |
+| Pre-existing repository defects (8 items): a suite requiring a module that does not exist; the missing backend manifest that stops the container image building; two coverage-threshold keys naming no file; a test reporter configured but declared in no manifest; the setup file that never loads; the API integration suite unable to reach the handler; the documented lint configuration absent; an over-length log line | Two block release outright — the image cannot build and the API integration suite cannot run — and the reporter gap stops a clean checkout running the suite at all | Repository owner | 4–19h per item, see Section 2.2 |
+| No continuous integration or deployment automation (1 item) | Releases depend on manual steps, and a red gate cannot be attributed to a change | Repository owner | 4h |
+| Accepted exception (1 item): the redundant `method` local is retained at the maintainer's decision (`src/backend/handlers/helloHandler.js:31`) | The requested simplification is not in the tree; the second read stays load-bearing and three characterisation cases pin it | Maintainer | Closed — no work owed |
 
 ## 1.5 Access Issues
 
@@ -49,9 +49,9 @@ No access issues identified: the service is credential-free, needs no third-part
 
 1. **[High]** Provide the backend manifest so the container image builds.
 2. **[High]** Make the API integration suite able to start its server, restoring route coverage of `/hello`.
-3. **[High]** Decide the withheld local: authorise its removal and re-verify, or accept the exception.
-4. **[Medium]** Declare the test toolchain and reporter, and add CI running the gate.
-5. **[Medium]** Green the five failing suites and lift uncovered modules to the configured thresholds.
+3. **[High]** Declare the test toolchain and the configured reporter, so a clean checkout can run the suite.
+4. **[Medium]** Repair the suites that cannot load, green those that fail, and lift the uncovered modules to the configured thresholds.
+5. **[Medium]** Add the documented lint configuration and a pipeline that runs the gate on the supported runtime.
 
 # 2. Project Hours Breakdown
 
@@ -61,10 +61,10 @@ No access issues identified: the service is credential-free, needs no third-part
 |---|---|---|
 | Guard-clause restructure | 4 | The non-GET early return with its bare `return;`, the four GET statements de-indented, and the blank-line layout re-derived so the file reads cleanly inside a byte-identity constraint (`src/backend/handlers/helloHandler.js`). |
 | Comment and whitespace trim | 2 | A per-line disposition of the ten restating comments against a keep-only-what-the-code-does-not-say test, plus the three whitespace-only lines they left behind; three JSDoc blocks and the module header retained. |
-| Behaviour-preservation analysis and equivalence proofs | 8 | The per-path side-effect inventory, the helper-equivalence argument over every method-value class, the absent-request failure path, and the reproduction that showed the local's removal non-equivalent — the case the stop rule acts on. |
-| Characterisation suite | 11 | Two test-local helpers and ten blocks (27 cases, 211 appended lines) covering ordered call traces, fourteen guarded method-value classes, the `TypeError` before any side effect, error propagation, return discipline, the export surface and the two-read `request.method` contract. |
+| Behaviour-preservation analysis and equivalence proofs | 8 | The per-path side-effect inventory, the helper-equivalence argument over every method-value class, the missing-request failure path, and the reproduction that showed the local's removal non-equivalent — the case the stop rule acts on. |
+| Characterisation suite | 11 | Two test-local helpers and ten blocks (27 cases, 211 appended lines) covering ordered call traces, fourteen guarded method-value classes, the failure before any side effect, error propagation, return discipline, the export surface and the two-read `request.method` contract. |
 | Verification execution | 8 | The pre-change baseline, the appended suite before and after the restructure, both integration suites, two live captures with their response and 23-line log comparisons, the diff check and the syntax sweep. |
-| Independent review and runtime QA of the change | 10 | Package-gate runs against the change and against the pre-change base, HTTP verification across all methods and the health and 404 paths, the security pass over the refusal surface and injection carriers, the emitted-log pass, the browser-driven client evidence, and acceptance runs. |
+| Independent review and runtime QA of the change | 10 | Package-gate runs against the change and against the pre-change tree, HTTP verification across all methods and the health and 404 paths, the security pass over the refusal surface and injection carriers, the emitted-log pass, the browser-driven client evidence, and acceptance runs. |
 | Characterisation-suite documentation | 2 | JSDoc above both helpers in the repository's own shape, the two block markers rewritten to state what their titles do not, and the re-proof of the acceptance evidence afterwards (15 insertions, 2 deletions, comment text only). |
 | Change record | 2 | The reviewer-facing record of the work: structural changes, equivalence evidence with commands and results, the case left unchanged, and the defect inventory. |
 | **Total** | **47** | Equals the Completed Hours in Section 1.2. |
@@ -73,23 +73,30 @@ No access issues identified: the service is credential-free, needs no third-part
 
 | Category | Hours | Priority |
 |---|---|---|
-| Withheld structural change: decide the redundant local and, if authorised, remove it and re-verify the two-read pins | 3 | High |
+| Buildable container image: the Dockerfile copies and installs from a backend manifest that does not exist | 3 | High |
 | Runnable API integration suite: give it the server it starts and align the configuration surface it reads | 4 | High |
-| Buildable container image: the Dockerfile copies a backend manifest that does not exist | 3 | High |
-| Four smaller repository defects: the stale suite requiring a missing module, two dead coverage keys, the undeclared test reporter, the unregistered setup file | 5 | High |
-| Remaining five failing package suites brought to green (config, index, router, server, logger) | 11 | Medium |
-| The configured coverage thresholds met — router.js 36.84%, index.js 23.07%, logger.js 72.72% against a global 85 / 80 / 90 / 85 | 6 | Medium |
+| Declared test toolchain and reporter: the repository declares no test dependency, and the configured reporter must be present before any run with that configuration starts | 3 | High |
+| The three suites that cannot load, plus the stale suite requiring a module that was never created | 3 | High |
+| The four remaining failing suites brought to green (router, logger, index, plus their causes) | 5 | High |
+| The configured coverage thresholds met — router.js 36.84%, index.js 23.07% against a global 85 / 80 / 90 / 85 | 6 | Medium |
+| The two dead coverage-threshold keys removed or repointed | 1 | Medium |
 | Lint and format configuration added, as the contributing guide already documents | 3 | Medium |
 | Continuous integration added and running the package gate | 4 | Medium |
 | Container build and run verified, and the supported-runtime question settled (the project documents Node 18.x, which is past upstream support) | 4 | Medium |
-| Style exceptions settled deliberately: two over-length lines inside the frozen test region and the moved 107-character success log | 2 | Low |
-| **Total** | **45** | Equals the Remaining Hours in Section 1.2 and the pie chart in Section 7. |
+| Style exceptions settled deliberately: the 107-character success log and two over-length lines inside the frozen test region | 2 | Low |
+| The unregistered setup file either registered or removed | 1 | Low |
+| The alternate router module repointed or retired: it calls a logger method that does not exist | 1 | Low |
+| The two-read contract decision recorded in the code's own documentation | 1 | Low |
+| Log-value sanitisation settled (optional; the HTTP parser rejects malformed method tokens before the handler) | 1 | Low |
+| **Total** | **42** | Equals the Remaining Hours in Section 1.2 and the pie chart in Section 7. |
 
 ## 2.3 Hour Calculation and Confidence
 
-Completed 47h + Remaining 45h = **92 total hours**; 47 ÷ 92 = **51.1% complete**. Every hour traces to a requirement clause of the plan of record or to a path-to-production need: the completed column to the restructure, the comment trim, the equivalence analysis, the characterisation suite, the verification runs, the independent review of the change, the suite documentation and the change record; the remaining column to the one withheld clause, the defects that stop a container build and a suite from running, the five failing suites, the coverage shortfall, and the tooling and automation the repository does not yet have.
+Completed 47h + Remaining 42h = **89 total hours**; 47 ÷ 89 = **52.8% complete**. Every hour traces to a requirement clause of the plan of record or to a path-to-production need: the completed column to the restructure, the comment trim, the equivalence analysis, the characterisation suite, the verification runs, the independent review of the change, the suite documentation and the change record; the remaining column to the defects that stop a container build and a suite from running, the toolchain declaration, the failing suites, the coverage shortfall, and the tooling and automation the repository does not yet have.
 
-Confidence is **high** on the completed side — the deliverables were inspected line by line against the pre-change baseline, the suite was executed against both trees, and every command quoted here was run against the delivered tree — and **medium-high** on the remaining side, where the suite repairs are sized from the observed failure set and the coverage work from the measured gaps per module.
+One scoped item is no longer carried as work: the 3 hours previously held for deciding the withheld `method` local and removing it if authorised. That decision has been taken — the retained form is accepted as delivered — so the item is settled rather than outstanding, and holding hours against it would overstate what remains. Nothing else moved: the delivered work is unchanged at 47 hours.
+
+Confidence is **high** on the completed side — the deliverables were inspected line by line against the pre-change baseline, the suite was executed against both trees, and every command quoted here was run against the delivered tree — and **medium-high** on the remaining side, where the suite repairs are sized from the observed failure set (22 failing tests across 7 suites) and the coverage work from the measured gaps per module.
 
 # 3. Test Results
 
@@ -122,9 +129,9 @@ Status of each flow driven against the running service (development mode, a real
 - ✅ **Non-GET `/hello`** — `POST`, `PUT`, `DELETE`, `OPTIONS` and `HEAD` each answer `405`, `text/plain`, body `Method Not Allowed`, with `Allow: GET`, delegated once to the shared 405 writer.
 - ✅ **`GET /health`** — `200`, `application/json`, body `{"status":"up"}`.
 - ✅ **Unknown path** — `404`, `text/plain`, body `Not Found`.
-- ✅ **Log contract** — GET emits the entry line, then the request line, then the success line; every refusal emits the entry line, then the unsupported-method line at `ERROR`, then the request line at `WARN`, then `Responding with 405 Method Not Allowed`. No uncaught exception or unexpected error-level line appeared anywhere in the stream.
+- ✅ **Log contract** — GET emits the entry line, then the request line, then the success line; every refusal emits the entry line, then the unsupported-method line at `ERROR`, then the request line at `WARN`, then `Responding with 405 Method Not Allowed`; a clean six-request sweep produces exactly 23 filtered lines. No uncaught exception or unexpected error-level line appeared anywhere in the stream.
 - ✅ **Graceful shutdown** — `SIGTERM` logs `SIGTERM signal received. Shutting down server...` then `Server stopped`; the process exits and releases the port.
-- ✅ **Browser rendering** — `/hello` rendered as `Hello world` plain text and `/health` in the browser's JSON view, with status and content type read from the network layer; the console carried no page error. Scripted in-page requests are refused by the service's own `Content-Security-Policy`, which is the intended posture for a text-and-JSON API.
+- ✅ **Browser rendering** — `/hello` rendered as `Hello world` (200, `text/plain`, 11 bytes) and an unknown path as `Not Found` (404, 9 bytes), with status and content type read from the network layer and no page error; `/health` renders in the browser's JSON view. Scripted in-page requests are refused by the service's own `Content-Security-Policy`, which is the intended posture for a text-and-JSON API.
 - ⚠ **`/hello` through the API integration suite** — that suite's setup fails before the handler is reached, so it contributed no runtime evidence here; the route was driven directly against the running listener instead.
 - ⚠ **Container run** — not exercised: the image does not build as shipped.
 
@@ -153,30 +160,30 @@ Status of each flow driven against the running service (development mode, a real
 
 | What the AAP/Rule Required | What Was Delivered Instead | Why It Diverged | Impact | Remediation |
 |---|---|---|---|---|
-| Remove the redundant local copy of the request method | The local is retained at `src/backend/handlers/helloHandler.js:31` and used by the guard at line 33 and the error log at line 34 | Equivalence cannot be shown, and the instruction for exactly that case is to stop, leave the code and report it | The requested simplification is absent; the second read stays load-bearing | Decide whether getter-backed requests are in contract; if yes, 3h to remove and re-verify |
-| Verification to run on Node 18.20.8 | Validation ran on Node 20.20.2, the line this environment pins | The environment pins the 20.x line and provisions the toolchain for it | None for this change, which is runtime-neutral; no 18.x run was performed | Re-run on 18.20.8 only if the project must be certified on its documented line |
-| Install the test packages locally and keep the installation out of the commit | Nothing was installed; the packages resolve read-only from outside the checkout, and nothing is declared in a manifest | The environment forbids a `node_modules` directory inside a checkout; the repository declares no test toolchain at all | A clean checkout cannot run the suite until the toolchain is declared | Declare the toolchain and the reporter; part of the 5h defect work |
-| Commit on a branch named for the change type; capture on the documented fixed port | The assigned branch was used, and captures ran on this environment's own port | The branch is assigned and must not be changed; the fixed port may not be bound outside a private network namespace on a shared host | Cosmetic and operational only; the commit-format half of the convention is followed | None |
-| Test additions sized to the projected 176 insertions / 314 lines | 211 insertions / 349 lines | The plan fixes no internal formatting beyond single-blank-line separation, and the repository's own documentation convention requires JSDoc on the two helpers, which the projection predates | A reader comparing the hunk header with the projection sees a difference that is blank lines plus thirteen lines of JSDoc | None; treat 211 / 0 as the delivered figure |
-| Added and moved lines stay within 100 characters | The relocated success log is 107 characters (`src/backend/handlers/helloHandler.js:42`) | The plan names it the single accepted exception and forbids wrapping it | One line stays over the guideline, and no linter exists to flag it | Settle deliberately in a later formatting pass (2h, Low) |
+| Remove the redundant local copy of the request method | The local is retained at `src/backend/handlers/helloHandler.js:31` and used by the guard at line 33 and the error log at line 34 | Equivalence cannot be shown, and the instruction for exactly that case is to stop, leave the code and report it; the retained form was then accepted at review | The requested simplification is absent; the second read stays load-bearing | Sanctioned, no work owed; if the contract is later widened to exclude getter-backed requests, 3h to remove and re-verify |
+| Verification to run on Node 18.20.8 | Validation ran on Node 20.20.2, the line this environment pins | The environment pins the 20.x line and provides the toolchain for it | None for this change, which is runtime-neutral; no 18.x run was performed | Re-run on 18.20.8 only if the project must be certified on its documented line |
+| Install the test packages locally and keep the installation out of the commit | Nothing was installed; the packages were already available to the toolchain and nothing is declared in a manifest | The repository declares no test toolchain at all, and an installed `node_modules` directory does not belong in a checkout | A clean checkout cannot run the suite until the toolchain is declared | Declare the toolchain and the reporter; part of the 3h toolchain task |
+| Commit on a branch named for the change type; capture on the documented fixed port | The branch this change sits on is not named for the change type, and captures ran on this environment's own port | The branch is assigned rather than chosen, and the fixed port the plan names may not be bound outside a private network namespace on a shared host | Cosmetic and operational only; the commit-format half of the convention is followed | None |
+| Test additions sized to the projected 176 insertions / 314 lines | 211 insertions / 349 content lines | The plan fixes no internal formatting beyond single-blank-line separation, and the repository's own documentation convention requires JSDoc on the two helpers, which the projection predates | A reader comparing the hunk header with the projection sees a difference that is blank lines plus thirteen lines of JSDoc | None; treat 211 / 0 as the delivered figure |
+| Added and moved lines stay within 100 characters | The relocated success log is 107 characters (`src/backend/handlers/helloHandler.js:42`), and two lines inside the frozen test region are 144 and 112 (`src/backend/__tests__/handlers/helloHandler.test.js:81`, `:106`) | The plan names the log line the single accepted exception and forbids wrapping it; the test lines sit in the region required to stay byte-identical | Three lines stay over the guideline, and no linter exists to flag them | Settle deliberately in a later formatting pass (2h, Low) |
 | The reviewer-facing record lives in the pull-request description | The full record rides in the delivered commits' messages; no repository file was added | The change boundary admits no new file and published history was not rewritten | The record is readable from the branch history but not from the working tree | Zero cost: paste it as the pull-request description when the change is opened |
 | Repair unrelated defects noticed on the way | All eight were reported and left exactly as they were | The instruction is to report them rather than repair them | Two block release — the image build and the API integration suite — and the reporter gap stops a clean checkout running the suite | The tasks in Section 2.2 |
 
-**The withheld structural change.** The plan's structural criterion asked for the "redundant" local copy of the request method to be removed, and it stands at `src/backend/handlers/helloHandler.js:31`. Removing it is not behaviour-preserving: the property is configurable, so a caller can back it with a getter, and the non-GET path would then read it a third time and write a different value into the error log — reproducing that case showed the log naming `PUT` where the delivered code names `POST`. The instruction for a case whose equivalence cannot be shown is explicit — stop, leave that part of the code as it is, and report it — so the local and both its uses were kept, and three characterisation cases now pin the two-read contract so an attempt to remove it later fails loudly. The reader's decision is whether requests whose method is backed by a getter are in contract; if they are not, the removal is 3 hours of work followed by re-running the read-count cases.
+**The withheld structural change (Sanctioned).** The plan's structural criterion asked for the "redundant" local copy of the request method to be removed, and it stands at `src/backend/handlers/helloHandler.js:31`, used by the guard at line 33 and the error log at line 34. Removing it cannot be shown behaviour-preserving: the property is configurable, so a caller can back it with a getter, and the refusal path would then read it a third time and write a different value into the error log — reproducing that case logs the third value where the delivered code logs the second. The instruction for a case whose equivalence cannot be shown is explicit: stop, leave that part of the code as it is, and report it. The local and both its uses were therefore kept, the case was reported, and the retained form was accepted at review; three characterisation cases in `src/backend/__tests__/handlers/helloHandler.test.js` pin the two-read contract, so a later attempt to remove it fails loudly.
 
-**The verification interpreter.** Validation ran on the mandated Node 20.x line, while the plan named Node 18.20.8 and the project documents Node 18.x. This is a substitution forced by the environment, not a choice about the code: the host pins the newer line and provisions the pinned test packages for it. The change is runtime-neutral — it adds only a unary `!` and a bare `return;` to syntax the module already used — so nothing in the delivered behaviour depends on the newer interpreter. The honest caveat is that no run was performed on 18.x, which is why that line appears under Not Covered in Section 3; re-run the suite there if the project must be certified on 18.x.
+**The verification interpreter.** Validation ran on the mandated Node 20.x line, while the plan named Node 18.20.8 and the project documents Node 18.x. This is a substitution forced by the environment, not a choice about the code: the host pins the newer line and provides the pinned test packages for it. The change is runtime-neutral — it adds only a unary `!` and a bare `return;` to syntax the module already used — so nothing in the delivered behaviour depends on the newer interpreter. The honest caveat is that no run was performed on 18.x, which is why that line appears under Not Covered in Section 3; re-run there if the project must be certified on 18.x.
 
-**Dependency provisioning and the undeclared reporter.** The plan asked for a local install of the test packages that would be kept out of the commit; nothing was installed, the packages resolved read-only from outside the checkout, and both manifests are byte-identical to their pre-change state, so the "no new dependencies" constraint is met by effect. This matters to the reader for a different reason: `package.json` declares no test dependencies at all, while `src/backend/jest.config.js` configures a reporter that must be present before any run with that configuration will start. A clean checkout therefore cannot run the suite without outside provisioning — the toolchain gap noted in Section 3, and one of the remaining tasks in Section 2.2.
+**Dependency provisioning and the undeclared reporter.** The plan asked for a local install of the test packages kept out of the commit; nothing was installed, the packages were already available to the toolchain, and both manifests are byte-identical to their pre-change state, so the "no new dependencies" constraint is met by effect. This matters to the reader for a different reason: `package.json` declares no test dependencies at all, while `src/backend/jest.config.js:55-67` configures a reporter that must be present before any run with that configuration will start. A clean checkout therefore cannot run the suite without provisioning those packages first — the toolchain gap noted in Section 3, and one of the remaining tasks in Section 2.2.
 
-**Environment-mandated substitutions.** Two details differ from the plan because the environment required it: the work sits on the branch the run assigned rather than one named for the change type, and the live captures ran on this environment's own port rather than the fixed port the plan's capture snippet names, which may not be bound outside a private network namespace on a shared host. Neither touches the deliverable. The commit-format half of the same convention is satisfied on every commit (`refactor:`, `test:` and `docs:` subjects), and the captures kept the plan's readiness bound, per-request deadline and teardown guardrails, so their evidence stands.
+**Environment-mandated substitutions.** Two details differ from the plan because the environment required it: the work sits on the branch it was assigned rather than one named for the change type, and the live captures ran on this environment's own port rather than the fixed port the plan's capture snippet names, which may not be bound outside a private network namespace on a shared host. Neither touches the deliverable. The commit-format half of the same convention is satisfied on every delivered commit (`refactor:`, `test:` and `docs:` subjects), and the captures kept the plan's readiness bound, per-request deadline and teardown guardrails, so their evidence stands.
 
-**The size of the test addition.** The plan projected 176 inserted lines and 314 total; the delivered file has 211 insertions and 349 lines. The difference is blank separator lines plus the two helpers' JSDoc: every helper, block, case, marker comment and convention the plan specifies is present, the inserted content is one hunk with zero deletions, and the first 137 lines are byte-identical to the pre-change file (sha256 `02a81e4c…`). The documentation is required by the repository's own convention, which asks for JSDoc on functions and is what the plan's projection predates. A reader comparing the hunk header against that projection should read 211 / 0 as the delivered figure; nothing needs changing.
+**The size of the test addition.** The plan projected 176 inserted lines and 314 total; the delivered file has 211 insertions and 349 content lines. The difference is blank separator lines plus the two helpers' JSDoc: every helper, block, case, marker comment and convention the plan specifies is present, the append is a single hunk with zero deletions, and the first 137 lines are byte-identical to the pre-change file. The documentation is required by the repository's own convention, which asks for JSDoc on functions and which the projection predates. A reader comparing the hunk header against that projection should read 211 / 0 as the delivered figure; nothing needs changing.
 
-**The one over-length line.** The relocated success log is 107 characters, against the 100-character guideline the contributing guide states (`src/backend/handlers/helloHandler.js:42`). The plan names it the single accepted exception and forbids wrapping it, because wrapping is not a requested change and an explanatory comment on the line would itself breach the fixed set of lines the change is allowed to touch. Two pre-existing lines inside the test file's frozen region are also over the limit (144 and 112 characters, at `src/backend/__tests__/handlers/helloHandler.test.js:81` and `:106`). No linter exists to flag any of them, so this is a decision for a later, separately authorised formatting pass rather than a defect of this change.
+**The over-length lines.** The relocated success log is 107 characters, against the 100-character guideline the contributing guide states (`src/backend/handlers/helloHandler.js:42`). The plan names it the single accepted exception and forbids wrapping it, because wrapping is not a requested change and an explanatory comment on the line would itself breach the fixed set of lines the change is allowed to touch. Two pre-existing lines inside the test file's frozen region are also over the limit — 144 and 112 characters, at `src/backend/__tests__/handlers/helloHandler.test.js:81` and `:106` — and that region is required to stay byte-identical. No linter exists to flag any of them, so this is a decision for a later, separately authorised formatting pass rather than a defect of this change.
 
-**Where the reviewer-facing record lives.** The plan's record — structural changes, equivalence evidence with commands and results, the case left unchanged, and the eight defects with file and line — is carried in the delivered commits' messages rather than in a repository file or a pull-request description. The change boundary admits no new file and the published history was not rewritten, so the commit messages are the carrier that survives. It is reachable from the branch history with `git log`; the zero-cost step is to paste it as the description when the change is opened for review.
+**Where the reviewer-facing record lives.** The record — structural changes, equivalence evidence with commands and results, the case left unchanged, and the eight defects with file and line — is carried in the delivered commits' messages rather than in a repository file or a pull-request description. The change boundary admits no new file and the published history was not rewritten, so the commit messages are the carrier that survives. It is reachable from the branch history with `git log`; the zero-cost step is to paste it as the description when the change is opened for review.
 
-**The pre-existing defects.** They were left in place on instruction, and they are what stand between this deliverable and a release from this repository rather than anything in the change itself. The container image cannot build because the Dockerfile copies a backend manifest that does not exist; the API integration suite fails in setup because it starts a server factory the server module does not export and reads a configuration surface the module does not expose; a suite requires a module that was never created; two coverage-threshold keys name files that do not exist; the configured reporter is declared nowhere; the setup file never loads and stubs logger methods that do not exist; the lint configuration the contributing guide documents is absent; and one success log exceeds the line guideline. A ninth item of the same class is reported with them: the alternate router module calls a logger method that does not exist, so it throws if it is ever moved onto the request path. Each is quoted with its file and line in the delivered record, and each has a task with hours in Section 2.2.
+**The reported, unrepaired defects.** They were left in place on instruction, and they are what stand between this deliverable and a release from this repository rather than anything in the change itself. The container image cannot build because the Dockerfile copies a backend manifest that does not exist; the API integration suite fails in setup because it starts a server factory the server module does not export; a suite requires a module that was never created; two coverage-threshold keys name files that do not exist; the configured reporter is declared nowhere; the setup file never loads and stubs logger methods that do not exist; the lint configuration the contributing guide documents is absent; and one success log exceeds the line guideline. Each is quoted with its file and line in the delivered record, and each has a task with hours in Section 2.2.
 
 # 6. Risk Assessment
 
@@ -193,48 +200,53 @@ Status of each flow driven against the running service (development mode, a real
 
 # 7. Visual Project Status
 
-**Hours: 47 completed (Dark Blue #5B39F3) against 45 remaining (White #FFFFFF) — 51.1% complete.**
+**Hours: 47 completed (Dark Blue #5B39F3) against 42 remaining (White #FFFFFF) — 52.8% complete.**
 
 ```mermaid
-pie title Project Hours Breakdown (51.1 percent complete)
+pie title Project Hours Breakdown (52.8 percent complete)
     "Completed Work" : 47
-    "Remaining Work" : 45
+    "Remaining Work" : 42
 ```
 
 **Remaining effort by priority**
 
 ```mermaid
 pie title Remaining Hours by Priority
-    "High" : 15
-    "Medium" : 28
-    "Low" : 2
+    "High" : 18
+    "Medium" : 18
+    "Low" : 6
 ```
 
-**Remaining hours by work category (the Section 2.2 detail, totalling 45)**
+**Remaining hours by work category (the Section 2.2 detail, totalling 42)**
 
 | Category | Hours | Priority |
 |---|---|---|
-| Withheld structural change: decide and, if authorised, remove the redundant local and re-verify | 3 | High |
-| Runnable API integration suite | 4 | High |
 | Buildable container image | 3 | High |
-| Four smaller repository defects | 5 | High |
-| Remaining five failing suites brought to green | 11 | Medium |
+| Runnable API integration suite | 4 | High |
+| Declared test toolchain and reporter | 3 | High |
+| The suites that cannot load, plus the stale suite | 3 | High |
+| The four remaining failing suites brought to green | 5 | High |
 | Configured coverage thresholds met | 6 | Medium |
+| Two dead coverage-threshold keys settled | 1 | Medium |
 | Lint and format configuration added | 3 | Medium |
 | Continuous integration added and running the package gate | 4 | Medium |
 | Container build/run verified and supported runtime settled | 4 | Medium |
 | Style exceptions settled | 2 | Low |
-| **Total** | **45** | |
+| Setup file registered or removed | 1 | Low |
+| Alternate router module repointed or retired | 1 | Low |
+| Two-read contract decision recorded | 1 | Low |
+| Log-value sanitisation settled | 1 | Low |
+| **Total** | **42** | |
 
 # 8. Summary & Recommendations
 
 **What was delivered.** The `/hello` handler now reads as a guard clause: a non-GET request logs, delegates to the shared 405 writer and returns, and the GET path sits flat beneath it. Ten comments that only restated the line below them are gone, while the module header, both JSDoc blocks, the imports, the private helper and the export remain byte-identical to what came before. The change lands in exactly two files — the handler and its suite — as 7 added and 19 removed handler lines plus 211 appended suite lines, with both manifests untouched, and the suite's two helpers now carry JSDoc in the repository's own shape.
 
-**What was proved.** A 30-case suite runs green, 27 of those cases added by this work: they pin the order of the GET path's five effects, fourteen guarded method-value classes, the `TypeError` an absent or unstringifiable request raises before any side effect, propagation of collaborator errors, the handler's `undefined` return even when collaborators return values, the export surface and its arity, and the two-read contract on the request method. The changed handler sits at 100% statement, branch, function and line coverage, and running the pre-change tree through the same gate shows the same seven failing suites and the same 22 failing tests, so the change adds 27 passing tests and no failure. On the running service the contract was verified end to end — 200 `text/plain` with the three security headers, 405 with `Allow: GET` for five other methods, 200 `application/json` on the health route, 404 elsewhere, the pinned log sequence, graceful shutdown — including through a real browser.
+**What was proved.** A 30-case suite runs green, 27 of those cases added by this work: they pin the order of the GET path's five effects, fourteen guarded method-value classes, the `TypeError` an absent or unstringifiable request raises before any side effect, propagation of collaborator errors, the handler's `undefined` return even when collaborators return values, the export surface and its arity, and the two-read contract on the request method. The changed handler sits at 100% statement, branch, function and line coverage, and running the pre-change tree through the same gate shows the same seven failing suites and the same 22 failing tests, so the change adds 27 passing tests and no failure. On the running service the contract was verified end to end — 200 `text/plain` with the three security headers, 405 with `Allow: GET` for five other methods, 200 `application/json` on the health route, 404 elsewhere, the pinned log sequence with its 23 lines across a six-request sweep, graceful shutdown — and through a real browser as an independent client.
 
-**What remains, and why it is more than the change itself.** The project stands at **51.1% of the 92 hours scoped**, and the residual 45 hours are almost entirely release-readiness of the surrounding repository rather than unfinished work on the handler. The container image cannot build because the Dockerfile copies a backend manifest that does not exist; the API integration suite fails in setup because it starts a server the server module does not export, so the route has no coverage in that suite; the package gate is red at its pre-existing baseline (22 failures across 7 suites, global coverage at 70.96 / 61.76 / 69.64 / 71.22 against configured thresholds of 85 / 80 / 90 / 85); the configured test reporter is declared in no manifest, so a clean checkout cannot run the suite at all; and there is no continuous integration, no deployment automation and no linter, even though the contributing guide documents one. One further item awaits a decision rather than effort: the redundant local copy of the request method was withheld because removing it cannot be shown behaviour-preserving for a getter-backed property, and only the maintainer can say whether such requests are in contract.
+**What remains, and why it is more than the change itself.** The project stands at **52.8% of the 89 hours scoped**, and the residual 42 hours are almost entirely release-readiness of the surrounding repository rather than unfinished work on the handler. The container image cannot build because the Dockerfile copies a backend manifest that does not exist; the API integration suite fails in setup because it starts a server the server module does not export, so the route has no coverage in that suite; the package gate is red at its pre-existing baseline (22 failures across 7 suites, global coverage at 70.96 / 61.76 / 69.64 / 71.22 against configured thresholds of 85 / 80 / 90 / 85); the configured test reporter is declared in no manifest, so a clean checkout cannot run the suite at all; and there is no continuous integration, no deployment automation and no linter, even though the contributing guide documents one. One item that used to sit here no longer does: the redundant local copy of the request method is retained by decision, accepted as delivered, and is settled rather than outstanding.
 
-**Critical path to production.** Provide the backend manifest so the image builds, then make the API integration suite runnable, then declare the test toolchain so a pipeline can run the gate — those three unblock everything else. After that, bring the five remaining failing suites to green and lift the uncovered modules to the thresholds already configured, add the lint configuration, and put the gate on the supported Node line in CI. The withheld local and the style exceptions are decisions, not blockers.
+**Critical path to production.** Provide the backend manifest so the image builds, make the API integration suite runnable, and declare the test toolchain so a pipeline can run the gate — those three unblock everything else. After that, repair the suites that cannot load, green the four that fail, lift the uncovered modules to the thresholds already configured, add the lint configuration, and put the gate on the supported Node line in CI. The style exceptions and the recorded two-read decision are closing tasks rather than blockers.
 
 **Production readiness assessment.** The delivered capability is production-ready and verified: its behaviour is unchanged, its boundary is exactly the two files intended, its runtime contract holds on a live listener, and it is covered at 100% in the changed area. The repository it lands in is not yet release-ready, for reasons that pre-date this change and that this change was instructed not to repair. Treat the refactor as shippable on review, and treat the container build, the API suite, the toolchain declaration and the delivery pipeline as the work that has to follow it.
 
@@ -256,14 +268,14 @@ node --version          # v20.20.2 on the verification host; any 18.x or newer l
 
 Nothing has to be configured: `PORT`, `HOST`, `NODE_ENV` and `LOG_LEVEL` all have working defaults (3000, `0.0.0.0`, `development`, `INFO`). No `.env` file is required — the startup log notes when none is found and falls back to the defaults and the environment variables.
 
-**Test toolchain.** The repository declares no test dependencies, and `src/backend/jest.config.js` configures a reporter that must be present before any run with that configuration will start; the integration suites also need a request client, and the configuration module loads a dotenv-style reader. Provide those four packages in the environment before running the suite. On a developer machine that is one command from the project root:
+**Test toolchain.** The repository declares no test dependencies, and `src/backend/jest.config.js` configures a reporter that must be present before any run with that configuration will start; the integration suites also need a request client, and the configuration module loads a dotenv-style reader. Provide those four packages before running the suite. On a developer machine that is one command from the project root:
 
 ```bash
 npm install --no-save jest@29.7.0 dotenv@16.0.3 supertest@6.3.3 jest-junit@16.0.0
 npx jest --version      # 29.7.0 — the runner the verification used
 ```
 
-(The verification host resolved the same four versions read-only from outside the checkout, so nothing was installed and no manifest changed. If you intend the suite to be runnable from a clean clone, declare them in a manifest instead — that is one of the remaining tasks in Section 2.2.)
+(The verification host had the same four versions available in its toolchain, so nothing was installed and no manifest changed. If you intend the suite to be runnable from a clean clone, declare them in a manifest instead — that is one of the remaining tasks in Section 2.2.)
 
 ### Application Startup
 
@@ -305,7 +317,7 @@ Integration suites — these bind fixed ports, so on a shared host run them insi
 unshare -n sh -c 'ip link set lo up && npx jest --config src/backend/jest.config.js src/backend/__tests__/integration/health.test.js'
 ```
 
-Expected: `Tests: 7 passed, 7 total`, exit 0. The API integration suite, by contrast, fails in its setup before reaching the handler (it starts a server factory the server module does not export) — see the defect list in Section 3.
+Expected: `Tests: 7 passed, 7 total`, exit 0. The API integration suite, by contrast, fails in its setup before reaching the handler (it starts a server factory the server module does not export) — see the API integration row in Section 3.
 
 Whole-package gate:
 
@@ -344,7 +356,7 @@ Shut down gracefully with `SIGTERM` (or `SIGINT`) to the process; it logs `SIGTE
 
 To observe the log contract while driving the routes, follow the server's output: a GET emits the entry line, then the request line, then the success line; a refusal emits the entry line, the unsupported-method line at `ERROR`, the request line at `WARN`, then `Responding with 405 Method Not Allowed`.
 
-A browser works as a client too: `/hello` renders as plain text and `/health` in Chrome's JSON viewer, with an empty console. Scripted in-page requests are refused by the service's own `Content-Security-Policy`; drive this API from an out-of-browser HTTP client.
+A browser works as a client too: `/hello` renders as `Hello world` plain text, an unknown path as `Not Found`, and `/health` in the browser's JSON view, all with an empty console. Scripted in-page requests are refused by the service's own `Content-Security-Policy`; drive this API from an out-of-browser HTTP client.
 
 ### Troubleshooting
 

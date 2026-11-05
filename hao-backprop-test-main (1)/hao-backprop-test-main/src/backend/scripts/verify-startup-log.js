@@ -10,11 +10,18 @@
  *
  * Run from `src/backend` with `node scripts/verify-startup-log.js`
  * (`npm run verify:startup` reaches the same script). A bare invocation runs all six
- * checks and prints one PASS, FAIL or CONFLICT line per check; `-h` and `--help` print
- * the usage block and exit 0, and any other argument is rejected with exit status 2.
- * The exit status is 0 when every check passes, 1 when any check fails or stands down
- * on an environment conflict, and 2 for a usage error. This is not a Jest suite and is
- * never collected as one.
+ * checks and prints one PASS, FAIL, CONFLICT or PRECONDITION line per check; `-h` and
+ * `--help` print the usage block and exit 0, and any other argument is rejected with exit
+ * status 2. The exit status is 0 when every check passes, 1 when any check fails, stands
+ * down on an environment conflict or is left unobserved, and 2 for a usage error. This is
+ * not a Jest suite and is never collected as one.
+ *
+ * A run whose application cannot start at all, for a cause of the run's own environment
+ * rather than of the criteria, is a precondition: a declared dependency that was never
+ * installed, as in a fresh clone, leaves each check nothing to observe, so every check
+ * prints PRECONDITION, the run counts those apart from the criteria and its exit status
+ * stays non-zero. Install what the manifest declares with `cd src/backend && npm install`
+ * and rerun; this tool never installs anything itself.
  *
  * The criteria name fixed addresses: `127.0.0.1:3100` for the bound-address runs, the
  * documented default `0.0.0.0:3000` for the defaults run, `127.0.0.1:31002` for the
@@ -84,6 +91,10 @@ const USAGE_LINES = [
   'the real application running, spawning it where its own run needs one, and reads what',
   'the process writes to its streams and returns on the wire.',
   '',
+  'Each check prints exactly one outcome line: PASS when the criteria held, FAIL when they',
+  'were broken, CONFLICT when the address they are observed at belonged to another',
+  'process, and PRECONDITION when the run\'s own environment never let them be observed.',
+  '',
   'This tool takes no arguments.',
   '',
   'Because no criterion address may be substituted, these four must be free:',
@@ -96,8 +107,16 @@ const USAGE_LINES = [
   'before the check bound it, is an environment conflict: that check prints CONFLICT and',
   'stands down instead of failing the criteria.',
   '',
-  'Exit status: 0 when every check passes, 1 when any check fails or stands down on an',
-  'environment conflict, 2 for a usage error'
+  'An application that cannot start at all, for a cause of its own environment rather than',
+  'of the criteria (a declared dependency that is not installed, as in a fresh clone),',
+  'leaves every criterion unobserved: each check prints PRECONDITION, the run counts it',
+  'apart and still exits non-zero. The reason is printed before the first check whenever',
+  'the pre-flight probe finds the run cannot resolve what the manifest declares. Install',
+  'the dependencies with `cd src/backend && npm install` and rerun; this tool never',
+  'installs anything itself.',
+  '',
+  'Exit status: 0 when every check passes, 1 when any check fails, stands down on an',
+  'environment conflict or leaves a criterion unobserved, 2 for a usage error'
 ];
 
 // Every wait is bounded, so a stuck child fails its check instead of blocking the run
@@ -176,6 +195,16 @@ const FAILED_START_RECORD = logRecord(
   'ERROR',
   `Failed to start application: .*${ADDRESS_IN_USE_CODE}.*${escapeRegExp(ADDRESS_IN_USE_TARGET)}`
 );
+
+// A module-resolution failure is the run's own precondition failing, never a criterion
+// breaking: it is what a fresh clone reports for a declared dependency that was never
+// installed, before any listener exists
+const MODULE_NOT_FOUND_CODE = 'MODULE_NOT_FOUND';
+const MISSING_MODULE_PATTERN = /Cannot find module '([^']+)'/;
+
+// The tool never installs anything itself: it names the command that installs what the
+// manifest declares and leaves the decision, and the checkout, to the reader
+const INSTALL_COMMAND = 'cd src/backend && npm install';
 
 /**
  * Splits captured output into its non-empty lines
@@ -315,6 +344,93 @@ function bindConflictReason(handle, host, port) {
   if (!handle.stderr.includes(`${host}:${port}`)) return null;
 
   return conflictReason(host, port, `the bind failed with ${ADDRESS_IN_USE_CODE}`);
+}
+
+/**
+ * Reduces a module specifier to the package that owns it
+ *
+ * @param {string} specifier - Specifier as Node reports it, e.g. `dotenv` or `pkg/lib/x`
+ * @returns {string} Top-level package name, carrying its scope when it has one
+ */
+function packageNameOf(specifier) {
+  const segments = specifier.split('/');
+  if (specifier.startsWith('@') && segments.length >= 2) {
+    return `${segments[0]}/${segments[1]}`;
+  }
+
+  return segments[0];
+}
+
+/**
+ * Names the package a run could not resolve, or null when its output shows no such failure
+ *
+ * Only a package the manifest declares counts as a precondition. A relative or absolute
+ * specifier names a module inside the checkout, and a specifier that reaches inside a
+ * package names one too, so a missing module of either kind is a defect of the application
+ * itself and still fails its check. The output has to carry Node's own error code as well,
+ * so a message that merely quotes the sentence while reporting something else is never
+ * taken for a precondition.
+ *
+ * @param {string} text - Captured stdout and stderr of one run
+ * @returns {string|null} Package name, or null when the run shows no such failure
+ */
+function unresolvedPackage(text) {
+  if (!text.includes(MODULE_NOT_FOUND_CODE)) return null;
+
+  const match = MISSING_MODULE_PATTERN.exec(text);
+  if (match === null) return null;
+
+  const specifier = match[1];
+  if (specifier.startsWith('.') || path.isAbsolute(specifier)) return null;
+
+  // The declared package itself, never a path inside it: `dotenv` is what an install
+  // delivers, while `dotenv/lib/x` is a module the application names for itself
+  return specifier === packageNameOf(specifier) ? specifier : null;
+}
+
+/**
+ * Describes the missing package for the reason both precondition paths print
+ *
+ * @param {string} name - Package name the run failed to resolve
+ * @returns {string} Observation sentence naming the package and the failure
+ */
+function dependencyDetail(name) {
+  return `the declared dependency "${name}" is not installed `
+    + `(Cannot find module '${name}')`;
+}
+
+/**
+ * Builds the sentence both precondition paths report an unstartable run with
+ *
+ * The pre-flight probe and a check's own failed run describe the same condition, so they
+ * share this wording rather than drifting apart.
+ *
+ * @param {string} detail - How the precondition was observed, in the observer's words
+ * @returns {string} Reason to report for the run
+ */
+function preconditionReason(detail) {
+  return 'Environment precondition: the application could not start, because '
+    + `${detail}; the criteria were therefore never observed and this run says nothing `
+    + `about them. Install the backend dependencies with \`${INSTALL_COMMAND}\` and rerun.`;
+}
+
+/**
+ * Reads a precondition reason out of a run that never started, when that is what ended it
+ *
+ * The child exits before any listener exists, and the module it could not resolve is named
+ * in the output it already wrote, so the run is classified here instead of being
+ * attributed to the criteria.
+ *
+ * @param {Object} handle - Handle of the child whose startup wait failed
+ * @returns {string|null} Precondition reason, or null when the child shows no such failure
+ */
+function startupPreconditionReason(handle) {
+  if (!handle) return null;
+
+  const missing = unresolvedPackage(`${handle.stdout}${handle.stderr}`);
+  if (missing === null) return null;
+
+  return preconditionReason(dependencyDetail(missing));
 }
 
 /**
@@ -569,6 +685,32 @@ async function detectEnvFile() {
 }
 
 /**
+ * Names a declared package the run cannot resolve, read from a short probe of config.js
+ *
+ * One child loads the module that requires the declared dependency, from the same
+ * directory the checks spawn in, and its own output says whether resolution succeeded.
+ * The probe is a diagnostic: when it cannot be read, nothing is reported and the checks
+ * still classify each run for themselves from what they observe.
+ *
+ * @returns {Promise<string|null>} Package name, or null when the probe resolves everything
+ */
+async function detectMissingDependency() {
+  const probe = spawnServer(['-e', "require('./config.js');"], { NODE_ENV: 'development' }, []);
+
+  try {
+    await probe.waitForExit(EXIT_TIMEOUT_MS);
+    await probe.waitForClose(CLOSE_TIMEOUT_MS);
+  } catch (err) {
+    // The probe is a diagnostic: an unreadable precondition leaves it undetected
+    return null;
+  } finally {
+    await probe.kill();
+  }
+
+  return unresolvedPackage(`${probe.stdout}${probe.stderr}`);
+}
+
+/**
  * Issues one HTTP request and resolves with its status, headers and body
  *
  * @param {Object} options - Request description
@@ -624,15 +766,17 @@ function httpRequest(options) {
 }
 
 // Outcome of every check, printed once as a summary line
-const results = { passed: 0, failed: 0, conflicted: 0 };
+const results = { passed: 0, failed: 0, conflicted: 0, unobserved: 0 };
 
 /**
- * Runs one check, prints its single PASS, FAIL or CONFLICT line, and terminates the
- * children it owns
+ * Runs one check, prints its single PASS, FAIL, CONFLICT or PRECONDITION line, and
+ * terminates the children it owns
  *
- * A check stands down on an environment conflict instead of failing the criteria, so the
- * two outcomes are counted and printed apart: FAIL means the criteria were broken,
- * CONFLICT means the address they are observed at belonged to another process.
+ * A check stands down on an environment conflict, or on a run the environment never let
+ * start, instead of failing the criteria, so the outcomes are counted and printed apart:
+ * FAIL means the criteria were broken, CONFLICT means the address they are observed at
+ * belonged to another process, and PRECONDITION means the run itself could not start, so
+ * the criteria were never observed and the check has no verdict to give.
  *
  * @param {string} name - Check name as it appears in the result line
  * @param {Function} check - Check body, called with the run context
@@ -642,6 +786,7 @@ const results = { passed: 0, failed: 0, conflicted: 0 };
 async function runCheck(name, check, run) {
   const failures = [];
   const conflicts = [];
+  const preconditions = [];
   const owned = [];
   const reported = [];
 
@@ -668,14 +813,24 @@ async function runCheck(name, check, run) {
       conflicts.push(reason);
       return true;
     },
+    precondition: (handle) => {
+      // A run that never bound says nothing about the criteria, so a child whose own
+      // output shows a package it could not resolve stands its check down here rather
+      // than failing it on criteria nothing observed
+      const reason = startupPreconditionReason(handle);
+      if (reason === null) return false;
+      preconditions.push(reason);
+      return true;
+    },
     awaitStartup: async (handle, host, port, predicate, label) => {
       try {
         await handle.waitFor(predicate, OUTPUT_TIMEOUT_MS, label);
         return true;
       } catch (err) {
-        // A wait that ended because the address was taken leaves the check nothing to
-        // assert: it stands down as an environment conflict and never as a criteria FAIL.
-        // That classification reads the child's captured stderr, which the operating system
+        // A wait that ended because the address was taken, or because the run could not
+        // start at all, leaves the check nothing to assert: it stands down as an
+        // environment conflict or precondition and never as a criteria FAIL. Both
+        // classifications read the child's captured stderr, which the operating system
         // delivers over a pipe after the child has exited, so a finished child gets the
         // same bounded moment to drain its streams that the failure dump gives it.
         if (handle.exited) {
@@ -685,7 +840,10 @@ async function runCheck(name, check, run) {
             // Best effort: a partial read still carries whatever the child already wrote
           }
         }
+        // The address is asked about first: an occupied address is an observation about
+        // the environment, whatever else the child happened to report
         if (context.conflict(host, port, handle)) return false;
+        if (context.precondition(handle)) return false;
         throw err;
       }
     },
@@ -704,24 +862,29 @@ async function runCheck(name, check, run) {
     await handle.kill();
   }
 
-  if (failures.length === 0 && conflicts.length === 0) {
+  if (failures.length === 0 && conflicts.length === 0 && preconditions.length === 0) {
     results.passed += 1;
     console.log(`PASS ${name}`);
     return;
   }
 
   // The line names the outcome the check is judged by: a criteria failure outranks a
-  // conflict, and either way every reason the check recorded is printed under it
+  // conflict, a conflict outranks a precondition, and either way every reason the check
+  // recorded is printed under it
   if (failures.length > 0) {
     results.failed += 1;
     console.log(`FAIL ${name}`);
-  } else {
+  } else if (conflicts.length > 0) {
     results.conflicted += 1;
     console.log(`CONFLICT ${name}`);
+  } else {
+    results.unobserved += 1;
+    console.log(`PRECONDITION ${name}`);
   }
 
   failures.forEach((failure) => console.log(`  reason: ${failure}`));
   conflicts.forEach((conflict) => console.log(`  reason: ${conflict}`));
+  preconditions.forEach((precondition) => console.log(`  reason: ${precondition}`));
 
   const dumpHandles = reported.filter((handle, index) => reported.indexOf(handle) === index);
 
@@ -1163,9 +1326,11 @@ async function checkC5(context) {
 }
 
 /**
- * Runs every check in order and reports how many passed, failed or stood down
+ * Runs every check in order and reports how many passed, failed, stood down or were
+ * left unobserved
  *
- * @returns {Promise<number>} Exit status: 0 only when no check failed and none conflicted
+ * @returns {Promise<number>} Exit status: 0 only when no check failed, none conflicted
+ *   and none was left unobserved
  */
 async function main() {
   const run = { shared: [], state: {} };
@@ -1180,6 +1345,15 @@ async function main() {
       + '"Environment variables loaded from .env file" instead of the .env notice; the checks '
       + 'accept either message, and a .env that sets HOST or PORT changes the address the '
       + 'defaults check (C1b) observes');
+  }
+
+  // A run that cannot resolve its declared dependency cannot start, and would leave every
+  // check unobserved: say so once, up front, so the install step is read before the
+  // checks rather than inferred from six verdicts. The checks still run, because each one
+  // classifies its own run from what it observes and the probe can miss
+  const missingDependency = await detectMissingDependency();
+  if (missingDependency !== null) {
+    console.log(preconditionReason(dependencyDetail(missingDependency)));
   }
 
   try {
@@ -1201,8 +1375,8 @@ async function main() {
   }
 
   console.log(`${results.passed} checks passed, ${results.failed} failed, `
-    + `${results.conflicted} conflicted`);
-  return results.failed === 0 && results.conflicted === 0 ? 0 : 1;
+    + `${results.conflicted} conflicted, ${results.unobserved} unobserved`);
+  return results.failed === 0 && results.conflicted === 0 && results.unobserved === 0 ? 0 : 1;
 }
 
 /**

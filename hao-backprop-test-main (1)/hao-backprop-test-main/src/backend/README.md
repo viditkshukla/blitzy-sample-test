@@ -70,7 +70,7 @@ npm start
 npm run dev
 ```
 
-### Startup log line
+### Startup Log Line
 
 Starting the server prints the address it bound on standard output:
 

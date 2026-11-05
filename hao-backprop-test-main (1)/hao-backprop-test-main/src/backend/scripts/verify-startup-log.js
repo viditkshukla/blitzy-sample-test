@@ -23,6 +23,14 @@
  * stays non-zero. Install what the manifest declares with `cd src/backend && npm install`
  * and rerun; this tool never installs anything itself.
  *
+ * The same class covers a criterion the environment itself never let be observed: a
+ * `src/backend/.env` that sets HOST or PORT decides the address the defaults check (C1b)
+ * would otherwise observe, so that check prints PRECONDITION — naming the address the run
+ * announced, or the bind failure that refused the one its configuration supplied — the
+ * run counts it apart and still exits non-zero, and says nothing about the documented
+ * default. With neither value set in that file the criterion is observed as usual, and
+ * this tool never edits the file.
+ *
  * The criteria name fixed addresses: `127.0.0.1:3100` for the bound-address runs, the
  * documented default `0.0.0.0:3000` for the defaults run, `127.0.0.1:31002` for the
  * development run and for the requests C5 makes against it, and `127.0.0.1:31003` for
@@ -61,6 +69,12 @@ const TEST_PORT = 3100;
 const DEFAULT_PORT = 3000;
 const DEVELOPMENT_PORT = 31002;
 const CONFLICT_PORT = 31003;
+
+// The defaults run observes the documented default only while nothing else supplies HOST
+// or PORT, and a run that cannot take the address its own configuration supplied fails
+// with one of these codes, naming that address rather than the default
+const DEFAULT_ADDRESS = `0.0.0.0:${DEFAULT_PORT}`;
+const BIND_FAILURE_CODES = ['EADDRINUSE', 'EADDRNOTAVAIL'];
 
 // The startup line under test, exactly as the listener writes it
 const STARTUP_LINE_BOUND = `Server listening at http://127.0.0.1:${TEST_PORT}`;
@@ -114,6 +128,12 @@ const USAGE_LINES = [
   'the pre-flight probe finds the run cannot resolve what the manifest declares. Install',
   'the dependencies with `cd src/backend && npm install` and rerun; this tool never',
   'installs anything itself.',
+  '',
+  'A criterion the run\'s own .env leaves unobserved is the same class: when a',
+  'src/backend/.env sets HOST or PORT, the defaults check (C1b) observes the address that',
+  'file decides rather than the documented default, so it prints PRECONDITION — naming the',
+  'address the run announced, or the bind failure that refused it — instead of failing a',
+  'criterion nothing about the application broke. This tool never edits that file.',
   '',
   'Exit status: 0 when every check passes, 1 when any check fails, stands down on an',
   'environment conflict or leaves a criterion unobserved, 2 for a usage error'
@@ -347,6 +367,29 @@ function bindConflictReason(handle, host, port) {
 }
 
 /**
+ * Reports whether a run's own output shows it took an address other than the criterion default
+ *
+ * A `src/backend/.env` that sets HOST or PORT decides the address the defaults run binds,
+ * so the run either announces that address on stdout or, when that address cannot be
+ * taken, fails to bind on stderr while naming it. Both are read the same way: a
+ * startup-shaped line on stdout, or a bind failure on stderr whose codes the runtime
+ * guarantees and whose text does not carry the criterion's own default address. No
+ * regular expression is needed for either, and neither is taken from libuv's sentence.
+ *
+ * @param {Object} handle - Handle of the run being observed
+ * @returns {boolean} True when the run shows an address other than the default
+ */
+function announcedOtherAddress(handle) {
+  if (hasLine(handle.stdout, STARTUP_LINE_PATTERN)) {
+    return !hasLine(handle.stdout, exactLine(STARTUP_LINE_DEFAULT));
+  }
+
+  if (!BIND_FAILURE_CODES.some((code) => handle.stderr.includes(code))) return false;
+
+  return !handle.stderr.includes(DEFAULT_ADDRESS);
+}
+
+/**
  * Reduces a module specifier to the package that owns it
  *
  * @param {string} specifier - Specifier as Node reports it, e.g. `dotenv` or `pkg/lib/x`
@@ -431,6 +474,36 @@ function startupPreconditionReason(handle) {
   if (missing === null) return null;
 
   return preconditionReason(dependencyDetail(missing));
+}
+
+/**
+ * Builds the sentence the defaults check stands down with when a .env file decides the address
+ *
+ * C1b observes the address the server falls back to only while neither the environment
+ * nor a `src/backend/.env` supplies HOST or PORT. A `.env` file beside the sources is the
+ * configuration state the README documents, and its HOST or PORT decides the address the
+ * run binds, so the criterion is never observed in that state and this sentence is
+ * reported in place of a failure. It names the address the run announced, or quotes the
+ * bind failure that refused the address its configuration supplied, so the reader sees
+ * which address the file decided. It names no install command, because nothing is missing
+ * here: the configuration did exactly what it is documented to do.
+ *
+ * @param {Object} handle - Handle of the defaults run that showed another address
+ * @returns {string} Reason to report for that check
+ */
+function buildEnvAddressReason(handle) {
+  const announced = startupLines(handle.stdout);
+  const refused = nonEmptyLines(handle.stderr)
+    .find((line) => BIND_FAILURE_CODES.some((code) => line.includes(code)));
+  const detail = announced.length > 0
+    ? `the run announced "${announced[0]}"`
+    : 'the run could not bind the address its configuration supplied'
+      + (refused === undefined ? '' : ` (${refused})`);
+
+  return 'Environment precondition: src/backend/.env is present and its HOST or PORT decides '
+    + `the address this check observes, because ${detail}; the criterion was therefore never `
+    + `observed, and this run says nothing about the default "${STARTUP_LINE_DEFAULT}". Set `
+    + 'neither value in that file to observe it; this tool never edits it.';
 }
 
 /**
@@ -822,6 +895,13 @@ async function runCheck(name, check, run) {
       preconditions.push(reason);
       return true;
     },
+    standDown: (reason) => {
+      // A criterion the run's own environment never let this check observe stands down
+      // here, in the same collection the missing-dependency class records in, so the
+      // reason is printed and counted as unobserved instead of failing a criterion that
+      // nothing about the application broke
+      preconditions.push(reason);
+    },
     awaitStartup: async (handle, host, port, predicate, label) => {
       try {
         await handle.waitFor(predicate, OUTPUT_TIMEOUT_MS, label);
@@ -975,14 +1055,26 @@ async function checkC1b(context) {
     ? ' (src/backend/.env is present and may set HOST or PORT)'
     : '';
 
+  // The wait ends on the documented default line, and, while a .env file is present, on
+  // the address that file's own configuration decided: the check then stands down below
+  // rather than failing a criterion the environment never let it observe
   const started = await context.awaitStartup(
     child,
     '0.0.0.0',
     DEFAULT_PORT,
-    (handle) => hasLine(handle.stdout, exactLine(STARTUP_LINE_DEFAULT)),
+    (handle) => hasLine(handle.stdout, exactLine(STARTUP_LINE_DEFAULT))
+      || (context.state.envFilePresent && announcedOtherAddress(handle)),
     `the startup line "${STARTUP_LINE_DEFAULT}" on stdout${envFileNote}`
   );
   if (!started) return;
+
+  // The documented default was not the address this run took, so its own .env file
+  // decided the address and the criterion was never observed: stand the check down in
+  // place of failing it, and keep the run's non-zero exit status
+  if (context.state.envFilePresent && !hasLine(child.stdout, exactLine(STARTUP_LINE_DEFAULT))) {
+    context.standDown(buildEnvAddressReason(child));
+    return;
+  }
 
   const lines = nonEmptyLines(child.stdout);
   const startup = startupLines(child.stdout);
@@ -1343,8 +1435,9 @@ async function main() {
   if (run.state.envFilePresent) {
     console.log('Environment precondition: src/backend/.env is present, so config.js writes '
       + '"Environment variables loaded from .env file" instead of the .env notice; the checks '
-      + 'accept either message, and a .env that sets HOST or PORT changes the address the '
-      + 'defaults check (C1b) observes');
+      + 'accept either message, and a .env that sets HOST or PORT decides the address the '
+      + 'defaults check (C1b) observes, so C1b stands down as unobserved instead of failing '
+      + 'when the run takes, or cannot take, an address other than that check\'s default');
   }
 
   // A run that cannot resolve its declared dependency cannot start, and would leave every

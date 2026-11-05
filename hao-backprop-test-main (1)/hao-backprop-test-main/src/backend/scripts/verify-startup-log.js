@@ -8,9 +8,11 @@
  * inspects source code.
  *
  * Run from `src/backend` with `node scripts/verify-startup-log.js`
- * (`npm run verify:startup` reaches the same script). One PASS/FAIL line is printed
- * per check, and the exit status is 0 only when all six pass. This is not a Jest
- * suite and is never collected as one.
+ * (`npm run verify:startup` reaches the same script). A bare invocation runs all six
+ * checks and prints one PASS/FAIL line per check; `-h` and `--help` print the usage block
+ * and exit 0, and any other argument is rejected with exit status 2. The exit status is 0
+ * when every check passes, 1 when any check fails and 2 for a usage error. This is not a
+ * Jest suite and is never collected as one.
  *
  * The criteria name fixed addresses: `127.0.0.1:3100` for the bound-address runs, the
  * documented default `0.0.0.0:3000` for the defaults run, `127.0.0.1:31002` for the
@@ -66,6 +68,27 @@ const SCENARIO_ADDRESSES = [
   { host: '0.0.0.0', port: DEFAULT_PORT },
   { host: '127.0.0.1', port: DEVELOPMENT_PORT },
   { host: '127.0.0.1', port: CONFLICT_PORT }
+];
+
+// Usage block: what the tool verifies, that it takes no arguments, the addresses it
+// needs free, and the exit statuses it can return
+const USAGE_LINES = [
+  'Usage: node scripts/verify-startup-log.js',
+  '',
+  'Verifies the server\'s startup announcement: the listener prints',
+  '`Server listening at http://<host>:<port>` on standard output when it starts,',
+  'unconditionally, including under `NODE_ENV=test`. Six checks are run, each spawning',
+  'the real application and reading what the process writes.',
+  '',
+  'This tool takes no arguments.',
+  '',
+  'Because no criterion address may be substituted, these four must be free:',
+  `  127.0.0.1:${TEST_PORT}    the bound-address run (C1a) and the test-mode run (C2)`,
+  `  0.0.0.0:${DEFAULT_PORT}      the defaults run (C1b)`,
+  `  127.0.0.1:${DEVELOPMENT_PORT}   the development run (C3) and the C5 requests`,
+  `  127.0.0.1:${CONFLICT_PORT}   the address-in-use run (C4)`,
+  '',
+  'Exit status: 0 when every check passes, 1 when any check fails, 2 for a usage error'
 ];
 
 // Every wait is bounded, so a stuck child fails its check instead of blocking the run
@@ -1078,23 +1101,72 @@ async function main() {
   return results.failed === 0 ? 0 : 1;
 }
 
-// Hard bound: a child that wedges the event loop still cannot hang the run
-const watchdog = setTimeout(() => {
-  killLiveChildren();
-  console.log(`Harness aborted: verification exceeded ${OVERALL_TIMEOUT_MS}ms`);
-  process.exit(1);
-}, OVERALL_TIMEOUT_MS);
-watchdog.unref();
+/**
+ * Writes the usage block to standard output
+ */
+function printUsage() {
+  USAGE_LINES.forEach((line) => console.log(line));
+}
 
-main()
-  .then((code) => {
-    process.exitCode = code;
-  })
-  .catch((err) => {
-    console.log(`Harness error: ${err && err.message ? err.message : String(err)}`);
-    process.exitCode = 1;
-  })
-  .finally(() => {
-    clearTimeout(watchdog);
+/**
+ * Inspects the command line and decides whether the checks should run
+ *
+ * A bare invocation runs all six checks. `-h` and `--help` print the usage block and
+ * stop with status 0, and any other argument is rejected with an error naming it, the
+ * usage block, and status 2. Neither of those paths runs a check or prints a PASS/FAIL
+ * line, so a usage answer is never mistaken for a verification result.
+ *
+ * @param {Array<string>} args - Arguments as passed to the script, `process.argv.slice(2)`
+ * @returns {number|null} Null when the checks should run, the exit status otherwise
+ */
+function handleCommandLine(args) {
+  if (args.length === 0) {
+    return null;
+  }
+
+  if (args.length === 1 && (args[0] === '-h' || args[0] === '--help')) {
+    printUsage();
+    return 0;
+  }
+
+  console.log(`Unrecognised argument: ${JSON.stringify(args.join(' '))}`);
+  console.log('This tool takes no arguments; run it with -h or --help for usage.');
+  printUsage();
+  return 2;
+}
+
+/**
+ * Runs the six checks under the hard bound that keeps a wedged child from hanging the run
+ */
+function runChecks() {
+  // Hard bound: a child that wedges the event loop still cannot hang the run
+  const watchdog = setTimeout(() => {
     killLiveChildren();
-  });
+    console.log(`Harness aborted: verification exceeded ${OVERALL_TIMEOUT_MS}ms`);
+    process.exit(1);
+  }, OVERALL_TIMEOUT_MS);
+  watchdog.unref();
+
+  main()
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((err) => {
+      console.log(`Harness error: ${err && err.message ? err.message : String(err)}`);
+      process.exitCode = 1;
+    })
+    .finally(() => {
+      clearTimeout(watchdog);
+      killLiveChildren();
+    });
+}
+
+// Only a bare invocation runs the checks: the help and rejection paths settle here,
+// with no watchdog, no child process and no check ever started
+const usageExitCode = handleCommandLine(process.argv.slice(2));
+
+if (usageExitCode === null) {
+  runChecks();
+} else {
+  process.exitCode = usageExitCode;
+}

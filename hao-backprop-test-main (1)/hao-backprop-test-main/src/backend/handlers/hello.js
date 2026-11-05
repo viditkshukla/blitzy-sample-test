@@ -12,7 +12,7 @@
 // Import the shared status, header, message and method constants
 const { HTTP_STATUS, MESSAGES, HEADERS, HTTP_METHODS } = require('../utils/constants');
 
-// Import the canonical 405 handler so the method policy lives in exactly one module
+// Import the canonical 405 handler so the 405 policy has one owner in the live route table
 const { handleMethodNotAllowed } = require('./error');
 
 /**

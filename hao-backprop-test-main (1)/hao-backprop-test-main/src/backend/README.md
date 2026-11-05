@@ -70,6 +70,31 @@ npm start
 npm run dev
 ```
 
+### Startup log line
+
+Starting the server prints the address it bound on standard output:
+
+```
+Server listening at http://127.0.0.1:3100
+```
+
+The line is emitted for every listener start and in every environment, including
+`NODE_ENV=test`. It is written directly to standard output, so it is present even when
+the logger is silenced under test, and it appears in addition to the logger's existing
+`Server started on <host>:<port>` line, which is unchanged.
+
+The address printed is the address the server bound. `HOST=127.0.0.1 PORT=3100` prints
+the line shown above, while an unset `HOST` and `PORT` fall back to the defaults and
+print `Server listening at http://0.0.0.0:3000`.
+
+```bash
+# Verify the startup log line and the surrounding startup behaviour
+node scripts/verify-startup-log.js
+
+# The same checks through the package script
+npm run verify:startup
+```
+
 ### Using the API
 
 Once the server is running, you can access the endpoint:

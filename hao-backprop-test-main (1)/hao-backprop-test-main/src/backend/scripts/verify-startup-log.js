@@ -3,26 +3,29 @@
  *
  * Runnable form of the acceptance criteria for the server's startup announcement:
  * the HTTP listener prints `Server listening at http://<host>:<port>` on standard
- * output when it starts, unconditionally, including under `NODE_ENV=test`. Every
- * check spawns the real application and reads what the process writes; no check
+ * output when it starts, unconditionally, including under `NODE_ENV=test`. Each check
+ * observes the real application running, spawning it where its own run needs one, and
+ * reads what the process writes to its streams and returns on the wire; no check
  * inspects source code.
  *
  * Run from `src/backend` with `node scripts/verify-startup-log.js`
  * (`npm run verify:startup` reaches the same script). A bare invocation runs all six
- * checks and prints one PASS/FAIL line per check; `-h` and `--help` print the usage block
- * and exit 0, and any other argument is rejected with exit status 2. The exit status is 0
- * when every check passes, 1 when any check fails and 2 for a usage error. This is not a
- * Jest suite and is never collected as one.
+ * checks and prints one PASS, FAIL or CONFLICT line per check; `-h` and `--help` print
+ * the usage block and exit 0, and any other argument is rejected with exit status 2.
+ * The exit status is 0 when every check passes, 1 when any check fails or stands down
+ * on an environment conflict, and 2 for a usage error. This is not a Jest suite and is
+ * never collected as one.
  *
  * The criteria name fixed addresses: `127.0.0.1:3100` for the bound-address runs, the
  * documented default `0.0.0.0:3000` for the defaults run, `127.0.0.1:31002` for the
  * development run and for the requests C5 makes against it, and `127.0.0.1:31003` for
  * the address-in-use run. They are never substituted, because each criterion is
  * observed at the address it names, so the machine running this tool has to leave all
- * four of them unoccupied: the tool holds each one only for the moment the check that
- * names it needs it. Every address is probed before the first check, and one that
- * another process already holds is reported as an environment conflict rather than as
- * a failure of the criteria.
+ * four of them unoccupied: a check holds its own address only while it runs, while the
+ * development listener on 127.0.0.1:31002 stays bound from C3 until the run releases it
+ * after C5. Every address is probed before the first check, and one that another process
+ * already holds is reported as an environment conflict rather than as a failure of the
+ * criteria.
  *
  * @module verify-startup-log
  */
@@ -77,8 +80,9 @@ const USAGE_LINES = [
   '',
   'Verifies the server\'s startup announcement: the listener prints',
   '`Server listening at http://<host>:<port>` on standard output when it starts,',
-  'unconditionally, including under `NODE_ENV=test`. Six checks are run, each spawning',
-  'the real application and reading what the process writes.',
+  'unconditionally, including under `NODE_ENV=test`. Six checks are run; each observes',
+  'the real application running, spawning it where its own run needs one, and reads what',
+  'the process writes to its streams and returns on the wire.',
   '',
   'This tool takes no arguments.',
   '',
@@ -88,7 +92,12 @@ const USAGE_LINES = [
   `  127.0.0.1:${DEVELOPMENT_PORT}   the development run (C3) and the C5 requests`,
   `  127.0.0.1:${CONFLICT_PORT}   the address-in-use run (C4)`,
   '',
-  'Exit status: 0 when every check passes, 1 when any check fails, 2 for a usage error'
+  'A criterion address another process holds, either before the run or in the window',
+  'before the check bound it, is an environment conflict: that check prints CONFLICT and',
+  'stands down instead of failing the criteria.',
+  '',
+  'Exit status: 0 when every check passes, 1 when any check fails or stands down on an',
+  'environment conflict, 2 for a usage error'
 ];
 
 // Every wait is bounded, so a stuck child fails its check instead of blocking the run
@@ -221,6 +230,22 @@ function startupLines(text) {
 }
 
 /**
+ * Builds the sentence both conflict paths report an unavailable address with
+ *
+ * The pre-flight probe and a check's own failed bind describe the same condition, so
+ * they share this wording rather than drifting apart.
+ *
+ * @param {string} host - Host the criterion address names
+ * @param {number} port - Port the criterion address names
+ * @param {string} detail - How the conflict was observed, in the observer's words
+ * @returns {string} Reason to report for that address
+ */
+function conflictReason(host, port, detail) {
+  return `Environment conflict: ${host}:${port} is not available `
+    + `(${detail}); the criteria name this address and it cannot be substituted`;
+}
+
+/**
  * Reports whether one address can be bound right now
  *
  * The address is held only for the instant of the probe: the listening server is
@@ -264,13 +289,32 @@ async function probeScenarioAddresses() {
     const error = await probeAddress(address.host, address.port);
     if (!error) continue;
 
-    const reason = `Environment conflict: ${address.host}:${address.port} is not available `
-      + `(${error.message}); the criteria name this address and it cannot be substituted`;
+    const reason = conflictReason(address.host, address.port, error.message);
     conflicts.set(`${address.host}:${address.port}`, reason);
     console.log(reason);
   }
 
   return conflicts;
+}
+
+/**
+ * Reads a conflict reason out of a check's own failed bind, when that is what failed it
+ *
+ * The pre-flight probe releases the socket it binds, so another process can still take a
+ * criterion address before the check's child binds it. That window is short but real,
+ * and the child's own EADDRINUSE for that address identifies it, so the conflict is
+ * classified here instead of being attributed to the criteria.
+ *
+ * @param {Object} handle - Handle of the child whose startup wait failed
+ * @param {string} host - Host the check bound
+ * @param {number} port - Port the check bound
+ * @returns {string|null} Conflict reason, or null when the child shows no such failure
+ */
+function bindConflictReason(handle, host, port) {
+  if (!handle || !handle.stderr.includes(ADDRESS_IN_USE_CODE)) return null;
+  if (!handle.stderr.includes(`${host}:${port}`)) return null;
+
+  return conflictReason(host, port, `the bind failed with ${ADDRESS_IN_USE_CODE}`);
 }
 
 /**
@@ -580,18 +624,24 @@ function httpRequest(options) {
 }
 
 // Outcome of every check, printed once as a summary line
-const results = { passed: 0, failed: 0 };
+const results = { passed: 0, failed: 0, conflicted: 0 };
 
 /**
- * Runs one check, prints its single PASS/FAIL line, and terminates the children it owns
+ * Runs one check, prints its single PASS, FAIL or CONFLICT line, and terminates the
+ * children it owns
  *
- * @param {string} name - Check name as it appears in the PASS/FAIL line
+ * A check stands down on an environment conflict instead of failing the criteria, so the
+ * two outcomes are counted and printed apart: FAIL means the criteria were broken,
+ * CONFLICT means the address they are observed at belonged to another process.
+ *
+ * @param {string} name - Check name as it appears in the result line
  * @param {Function} check - Check body, called with the run context
  * @param {Object} run - Run-scoped state shared by every check and released by main()
  * @returns {Promise<void>} Resolves when the check and its cleanup are done
  */
 async function runCheck(name, check, run) {
   const failures = [];
+  const conflicts = [];
   const owned = [];
   const reported = [];
 
@@ -608,11 +658,36 @@ async function runCheck(name, check, run) {
       return handle;
     },
     state: run.state,
-    conflict: (host, port) => {
-      const reason = run.state.conflicts.get(`${host}:${port}`);
-      if (reason === undefined) return false;
-      failures.push(reason);
+    conflict: (host, port, handle) => {
+      // The pre-flight probe is the first word on an address; a check's own failed bind
+      // covers the window the probe cannot, and only a handle that shows that failure
+      // classifies its check
+      const probed = run.state.conflicts.get(`${host}:${port}`);
+      const reason = probed === undefined ? bindConflictReason(handle, host, port) : probed;
+      if (reason === null) return false;
+      conflicts.push(reason);
       return true;
+    },
+    awaitStartup: async (handle, host, port, predicate, label) => {
+      try {
+        await handle.waitFor(predicate, OUTPUT_TIMEOUT_MS, label);
+        return true;
+      } catch (err) {
+        // A wait that ended because the address was taken leaves the check nothing to
+        // assert: it stands down as an environment conflict and never as a criteria FAIL.
+        // That classification reads the child's captured stderr, which the operating system
+        // delivers over a pipe after the child has exited, so a finished child gets the
+        // same bounded moment to drain its streams that the failure dump gives it.
+        if (handle.exited) {
+          try {
+            await handle.waitForClose(CLOSE_TIMEOUT_MS);
+          } catch (closeErr) {
+            // Best effort: a partial read still carries whatever the child already wrote
+          }
+        }
+        if (context.conflict(host, port, handle)) return false;
+        throw err;
+      }
     },
     expect: (condition, message) => {
       if (!condition) failures.push(message);
@@ -629,15 +704,24 @@ async function runCheck(name, check, run) {
     await handle.kill();
   }
 
-  if (failures.length === 0) {
+  if (failures.length === 0 && conflicts.length === 0) {
     results.passed += 1;
     console.log(`PASS ${name}`);
     return;
   }
 
-  results.failed += 1;
-  console.log(`FAIL ${name}`);
+  // The line names the outcome the check is judged by: a criteria failure outranks a
+  // conflict, and either way every reason the check recorded is printed under it
+  if (failures.length > 0) {
+    results.failed += 1;
+    console.log(`FAIL ${name}`);
+  } else {
+    results.conflicted += 1;
+    console.log(`CONFLICT ${name}`);
+  }
+
   failures.forEach((failure) => console.log(`  reason: ${failure}`));
+  conflicts.forEach((conflict) => console.log(`  reason: ${conflict}`));
 
   const dumpHandles = reported.filter((handle, index) => reported.indexOf(handle) === index);
 
@@ -677,11 +761,14 @@ async function checkC1a(context) {
     PORT: String(TEST_PORT)
   }, []);
 
-  await child.waitFor(
+  const started = await context.awaitStartup(
+    child,
+    '127.0.0.1',
+    TEST_PORT,
     (handle) => hasLine(handle.stdout, exactLine(STARTUP_LINE_BOUND)),
-    OUTPUT_TIMEOUT_MS,
     `the startup line "${STARTUP_LINE_BOUND}" on stdout`
   );
+  if (!started) return;
 
   const lines = nonEmptyLines(child.stdout);
   const startup = startupLines(child.stdout);
@@ -725,11 +812,14 @@ async function checkC1b(context) {
     ? ' (src/backend/.env is present and may set HOST or PORT)'
     : '';
 
-  await child.waitFor(
+  const started = await context.awaitStartup(
+    child,
+    '0.0.0.0',
+    DEFAULT_PORT,
     (handle) => hasLine(handle.stdout, exactLine(STARTUP_LINE_DEFAULT)),
-    OUTPUT_TIMEOUT_MS,
     `the startup line "${STARTUP_LINE_DEFAULT}" on stdout${envFileNote}`
   );
+  if (!started) return;
 
   const lines = nonEmptyLines(child.stdout);
   const startup = startupLines(child.stdout);
@@ -771,11 +861,14 @@ async function checkC2(context) {
     PORT: String(TEST_PORT)
   }, []);
 
-  await child.waitFor(
+  const started = await context.awaitStartup(
+    child,
+    '127.0.0.1',
+    TEST_PORT,
     (handle) => hasLine(handle.stdout, exactLine(STARTUP_LINE_BOUND)),
-    OUTPUT_TIMEOUT_MS,
     `the startup line "${STARTUP_LINE_BOUND}" on stdout`
   );
+  if (!started) return;
 
   // The assertion is on the line's presence, never on stdout being empty: every
   // logger helper returns before writing under test, so a logger-routed line would
@@ -825,11 +918,14 @@ async function checkC3(context) {
 
   context.state.developmentListener = listener;
 
-  await listener.waitFor(
+  const started = await context.awaitStartup(
+    listener,
+    '127.0.0.1',
+    DEVELOPMENT_PORT,
     (handle) => nonEmptyLines(handle.stdout).length >= 5,
-    OUTPUT_TIMEOUT_MS,
     'the five stdout lines a development startup writes'
   );
+  if (!started) return;
 
   const lines = nonEmptyLines(listener.stdout);
   const startup = startupLines(listener.stdout);
@@ -885,14 +981,18 @@ async function checkC4(context) {
     PORT: String(CONFLICT_PORT)
   }, []);
 
-  await holder.waitFor(
+  const started = await context.awaitStartup(
+    holder,
+    '127.0.0.1',
+    CONFLICT_PORT,
     (handle) => hasLine(handle.stdout, exactLine(STARTUP_LINE_CONFLICT)),
-    OUTPUT_TIMEOUT_MS,
     `the holder to bind 127.0.0.1:${CONFLICT_PORT}`
   );
+  if (!started) return;
 
   // The second process is the one under assertion: it must fail while the address
-  // is held, so its environment and address are identical to the holder's
+  // is held, so its environment and address are identical to the holder's and its own
+  // EADDRINUSE is the expected outcome this check asserts, never a classified conflict
   const failing = context.spawn(ENTRY_POINT_ARGS, {
     NODE_ENV: 'development',
     HOST: '127.0.0.1',
@@ -961,11 +1061,14 @@ async function checkC5(context) {
 
     context.state.developmentListener = listener;
 
-    await listener.waitFor(
+    const started = await context.awaitStartup(
+      listener,
+      '127.0.0.1',
+      DEVELOPMENT_PORT,
       (handle) => hasLine(handle.stdout, exactLine(STARTUP_LINE_DEVELOPMENT)),
-      OUTPUT_TIMEOUT_MS,
       `the listener this check started on 127.0.0.1:${DEVELOPMENT_PORT} to announce it`
     );
+    if (!started) return;
   }
 
   const request = (method, requestPath) => httpRequest({
@@ -1060,9 +1163,9 @@ async function checkC5(context) {
 }
 
 /**
- * Runs every check in order and reports how many passed
+ * Runs every check in order and reports how many passed, failed or stood down
  *
- * @returns {Promise<number>} Exit status: 0 only when all six checks pass
+ * @returns {Promise<number>} Exit status: 0 only when no check failed and none conflicted
  */
 async function main() {
   const run = { shared: [], state: {} };
@@ -1097,8 +1200,9 @@ async function main() {
     }
   }
 
-  console.log(`${results.passed} checks passed, ${results.failed} failed`);
-  return results.failed === 0 ? 0 : 1;
+  console.log(`${results.passed} checks passed, ${results.failed} failed, `
+    + `${results.conflicted} conflicted`);
+  return results.failed === 0 && results.conflicted === 0 ? 0 : 1;
 }
 
 /**

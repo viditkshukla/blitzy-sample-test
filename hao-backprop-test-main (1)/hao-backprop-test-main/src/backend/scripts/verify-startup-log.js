@@ -12,6 +12,16 @@
  * per check, and the exit status is 0 only when all six pass. This is not a Jest
  * suite and is never collected as one.
  *
+ * The criteria name fixed addresses: `127.0.0.1:3100` for the bound-address runs, the
+ * documented default `0.0.0.0:3000` for the defaults run, `127.0.0.1:31002` for the
+ * development run and for the requests C5 makes against it, and `127.0.0.1:31003` for
+ * the address-in-use run. They are never substituted, because each criterion is
+ * observed at the address it names, so the machine running this tool has to leave all
+ * four of them unoccupied: the tool holds each one only for the moment the check that
+ * names it needs it. Every address is probed before the first check, and one that
+ * another process already holds is reported as an environment conflict rather than as
+ * a failure of the criteria.
+ *
  * @module verify-startup-log
  */
 
@@ -27,25 +37,41 @@ const BACKEND_DIR = path.resolve(__dirname, '..');
 const ENV_NOTICE = 'No .env file found or unable to read it. '
   + 'Using default values and environment variables.';
 
+// The message config.js writes instead once a .env file has been loaded
+const ENV_LOADED_NOTICE = 'Environment variables loaded from .env file';
+
+// Shape of the announced line: it names the bound address, whatever that address is
+const STARTUP_LINE_PATTERN = /^Server listening at http:\/\//;
+
+// Addresses named by the criteria, never substituted: the defaults run has to observe
+// the documented default, and the address-in-use run has to collide with its own holder
+const TEST_PORT = 3100;
+const DEFAULT_PORT = 3000;
+const DEVELOPMENT_PORT = 31002;
+const CONFLICT_PORT = 31003;
+
 // The startup line under test, exactly as the listener writes it
-const STARTUP_LINE_BOUND = 'Server listening at http://127.0.0.1:3100';
-const STARTUP_LINE_DEFAULT = 'Server listening at http://0.0.0.0:3000';
-const STARTUP_LINE_DEVELOPMENT = 'Server listening at http://127.0.0.1:31002';
-const STARTUP_LINE_CONFLICT = 'Server listening at http://127.0.0.1:31003';
+const STARTUP_LINE_BOUND = `Server listening at http://127.0.0.1:${TEST_PORT}`;
+const STARTUP_LINE_DEFAULT = `Server listening at http://0.0.0.0:${DEFAULT_PORT}`;
+const STARTUP_LINE_DEVELOPMENT = `Server listening at http://127.0.0.1:${DEVELOPMENT_PORT}`;
+const STARTUP_LINE_CONFLICT = `Server listening at http://127.0.0.1:${CONFLICT_PORT}`;
 
 // Under NODE_ENV=test index.js does not run main(), so the listener starts in-process
 const IN_PROCESS_ARGS = ['-e', "require('./server').startServer();"];
 const ENTRY_POINT_ARGS = ['index.js'];
 
-// Addresses named by the criteria, never substituted: the defaults run needs the
-// configuration default, and an occupied address must surface as the check failing
-const TEST_PORT = 3100;
-const DEVELOPMENT_PORT = 31002;
-const CONFLICT_PORT = 31003;
+// Every address the criteria name, probed once before the first check runs
+const SCENARIO_ADDRESSES = [
+  { host: '127.0.0.1', port: TEST_PORT },
+  { host: '0.0.0.0', port: DEFAULT_PORT },
+  { host: '127.0.0.1', port: DEVELOPMENT_PORT },
+  { host: '127.0.0.1', port: CONFLICT_PORT }
+];
 
 // Every wait is bounded, so a stuck child fails its check instead of blocking the run
 const OUTPUT_TIMEOUT_MS = 10000;
 const EXIT_TIMEOUT_MS = 10000;
+const CLOSE_TIMEOUT_MS = 10000;
 const REQUEST_TIMEOUT_MS = 5000;
 const KILL_GRACE_MS = 1500;
 const OVERALL_TIMEOUT_MS = 180000;
@@ -106,11 +132,17 @@ function requestLogRecord(level, method, requestPath, statusCode) {
 // address-in-use path writes to stderr
 const STARTING_RECORD = logRecord('INFO', 'Starting Node\\.js Hello World application\\.\\.\\.');
 const COMPLETE_RECORD = logRecord('INFO', 'Application startup complete\\.');
-const ADDRESS_IN_USE = `listen EADDRINUSE: address already in use 127.0.0.1:${CONFLICT_PORT}`;
-const SERVER_ERROR_RECORD = logRecord('ERROR', escapeRegExp(`Server error: ${ADDRESS_IN_USE}`));
+// The address-in-use path is matched on the stable tokens the runtime guarantees, its
+// error code and the address, never on libuv's own sentence, which it may reword
+const ADDRESS_IN_USE_CODE = 'EADDRINUSE';
+const ADDRESS_IN_USE_TARGET = `127.0.0.1:${CONFLICT_PORT}`;
+const SERVER_ERROR_RECORD = logRecord(
+  'ERROR',
+  `Server error: .*${ADDRESS_IN_USE_CODE}.*${escapeRegExp(ADDRESS_IN_USE_TARGET)}`
+);
 const FAILED_START_RECORD = logRecord(
   'ERROR',
-  escapeRegExp(`Failed to start application: ${ADDRESS_IN_USE}`)
+  `Failed to start application: .*${ADDRESS_IN_USE_CODE}.*${escapeRegExp(ADDRESS_IN_USE_TARGET)}`
 );
 
 /**
@@ -132,6 +164,90 @@ function nonEmptyLines(text) {
  */
 function hasLine(text, pattern) {
   return nonEmptyLines(text).some((line) => pattern.test(line));
+}
+
+/**
+ * Reports whether a captured line is the announced startup line
+ *
+ * @param {string} line - One non-empty captured line
+ * @returns {boolean} True when the line has the announcement's shape
+ */
+function isStartupLine(line) {
+  return STARTUP_LINE_PATTERN.test(line);
+}
+
+/**
+ * Reports whether a captured line is one of the two messages config.js writes about
+ * the .env file
+ *
+ * @param {string} line - One non-empty captured line
+ * @returns {boolean} True for the .env notice or for the .env loaded message
+ */
+function isEnvironmentMessage(line) {
+  return line === ENV_NOTICE || line === ENV_LOADED_NOTICE;
+}
+
+/**
+ * Selects the address-bearing startup lines from captured output
+ *
+ * @param {string} text - Captured stream content
+ * @returns {Array<string>} Startup-shaped lines, in order
+ */
+function startupLines(text) {
+  return nonEmptyLines(text).filter(isStartupLine);
+}
+
+/**
+ * Reports whether one address can be bound right now
+ *
+ * The address is held only for the instant of the probe: the listening server is
+ * closed before the promise resolves, so no check races against this probe.
+ *
+ * @param {string} host - Host to bind
+ * @param {number} port - Port to bind
+ * @returns {Promise<Error|null>} Null when the address is free, the bind error otherwise
+ */
+function probeAddress(host, port) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const server = http.createServer();
+
+    function settle(error) {
+      if (settled) return;
+      settled = true;
+      resolve(error);
+    }
+
+    server.on('error', (err) => settle(err));
+    server.listen(port, host, () => {
+      server.close(() => settle(null));
+    });
+  });
+}
+
+/**
+ * Probes every address the criteria name and prints the ones already in use
+ *
+ * An occupied address is an environment conflict, not a failure of the criteria: the
+ * address each criterion is observed at cannot be substituted, so the conflict is
+ * reported and the check that names it stands down.
+ *
+ * @returns {Promise<Map<string, string>>} Conflict reason per `host:port` key
+ */
+async function probeScenarioAddresses() {
+  const conflicts = new Map();
+
+  for (const address of SCENARIO_ADDRESSES) {
+    const error = await probeAddress(address.host, address.port);
+    if (!error) continue;
+
+    const reason = `Environment conflict: ${address.host}:${address.port} is not available `
+      + `(${error.message}); the criteria name this address and it cannot be substituted`;
+    conflicts.set(`${address.host}:${address.port}`, reason);
+    console.log(reason);
+  }
+
+  return conflicts;
 }
 
 /**
@@ -178,11 +294,12 @@ function spawnServer(args, envOverrides = {}, deletedVars = []) {
 
   const watchers = [];
   const handle = {
-    child,
     stdout: '',
     stderr: '',
     exited: false,
-    exitCode: null
+    exitCode: null,
+    closed: false,
+    spawnError: null
   };
 
   /**
@@ -205,7 +322,9 @@ function spawnServer(args, envOverrides = {}, deletedVars = []) {
     notifyWatchers();
   });
 
-  child.on('error', () => {
+  child.on('error', (err) => {
+    // A spawn failure, kept so a check can report its cause instead of an early exit
+    handle.spawnError = err;
     handle.exited = true;
     liveChildren.delete(child);
     notifyWatchers();
@@ -214,6 +333,13 @@ function spawnServer(args, envOverrides = {}, deletedVars = []) {
   child.on('exit', (code) => {
     handle.exited = true;
     handle.exitCode = code;
+    liveChildren.delete(child);
+    notifyWatchers();
+  });
+
+  child.on('close', () => {
+    // Node delivers a finished child's stdio completely only once it has closed
+    handle.closed = true;
     liveChildren.delete(child);
     notifyWatchers();
   });
@@ -244,7 +370,10 @@ function spawnServer(args, envOverrides = {}, deletedVars = []) {
       if (predicate(handle)) {
         settle(null);
       } else if (handle.exited) {
-        settle(new Error(`process exited with code ${handle.exitCode} before ${label}`));
+        const cause = handle.spawnError
+          ? `failed to spawn (${handle.spawnError.message})`
+          : `exited with code ${handle.exitCode}`;
+        settle(new Error(`process ${cause} before ${label}`));
       }
     }
 
@@ -267,6 +396,52 @@ function spawnServer(args, envOverrides = {}, deletedVars = []) {
     timeoutMs,
     'the process to exit'
   );
+
+  /**
+   * Waits for the child to close, which is when its stdio is fully delivered
+   *
+   * Woken by the same watcher machinery the other waits use, but settled only by a
+   * close of the child's stdio streams, or by a spawn failure, after which no stream
+   * will ever close. It deliberately does not settle on 'exit': a child that has
+   * exited while its pipes are still draining has not delivered all of its output
+   * yet, so a check reading the captured streams at that moment would assert on a
+   * partial read. Only the bounded timeout ends the wait otherwise.
+   *
+   * @param {number} timeoutMs - Bound for the wait
+   * @returns {Promise<Object>} Resolves with the handle
+   */
+  handle.waitForClose = (timeoutMs) => {
+    // Nothing to wait for once the streams have closed, or once the child never
+    // spawned: register no waiter and no timer at all on those paths
+    if (handle.closed || handle.spawnError !== null) return Promise.resolve(handle);
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+
+      function settle(err) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const index = watchers.indexOf(watcher);
+        if (index !== -1) watchers.splice(index, 1);
+        if (err) reject(err);
+        else resolve(handle);
+      }
+
+      function watcher() {
+        if (settled) return;
+        if (handle.closed || handle.spawnError !== null) settle(null);
+      }
+
+      const timer = setTimeout(() => {
+        settle(new Error(`timed out after ${timeoutMs}ms waiting for `
+          + 'the process to close its stdio streams'));
+      }, timeoutMs);
+
+      watchers.push(watcher);
+      watcher();
+    });
+  };
 
   /**
    * Terminates the child: SIGTERM first, then SIGKILL if it outlives the grace period
@@ -300,6 +475,30 @@ function spawnServer(args, envOverrides = {}, deletedVars = []) {
   };
 
   return handle;
+}
+
+/**
+ * Reports whether src/backend/.env is present, without reading the filesystem
+ *
+ * One short child evaluates config.js from the same directory the checks spawn in and
+ * prints the message config.js writes once a .env file has been loaded.
+ *
+ * @returns {Promise<boolean>} True when config.js reports a loaded .env file
+ */
+async function detectEnvFile() {
+  const probe = spawnServer(['-e', "require('./config.js');"], { NODE_ENV: 'development' }, []);
+
+  try {
+    await probe.waitForExit(EXIT_TIMEOUT_MS);
+    await probe.waitForClose(CLOSE_TIMEOUT_MS);
+  } catch (err) {
+    // The probe is a diagnostic: an unreadable precondition leaves it undetected
+    return false;
+  } finally {
+    await probe.kill();
+  }
+
+  return hasLine(probe.stdout, exactLine(ENV_LOADED_NOTICE));
 }
 
 /**
@@ -365,9 +564,10 @@ const results = { passed: 0, failed: 0 };
  *
  * @param {string} name - Check name as it appears in the PASS/FAIL line
  * @param {Function} check - Check body, called with the run context
+ * @param {Object} run - Run-scoped state shared by every check and released by main()
  * @returns {Promise<void>} Resolves when the check and its cleanup are done
  */
-async function runCheck(name, check) {
+async function runCheck(name, check, run) {
   const failures = [];
   const owned = [];
   const reported = [];
@@ -379,9 +579,17 @@ async function runCheck(name, check) {
       reported.push(handle);
       return handle;
     },
-    observe: (handle) => {
+    share: (handle) => {
+      run.shared.push(handle);
       reported.push(handle);
       return handle;
+    },
+    state: run.state,
+    conflict: (host, port) => {
+      const reason = run.state.conflicts.get(`${host}:${port}`);
+      if (reason === undefined) return false;
+      failures.push(reason);
+      return true;
     },
     expect: (condition, message) => {
       if (!condition) failures.push(message);
@@ -407,12 +615,28 @@ async function runCheck(name, check) {
   results.failed += 1;
   console.log(`FAIL ${name}`);
   failures.forEach((failure) => console.log(`  reason: ${failure}`));
-  reported
-    .filter((handle, index) => reported.indexOf(handle) === index)
-    .forEach((handle) => {
-      console.log(`  stdout: ${JSON.stringify(handle.stdout)}`);
-      console.log(`  stderr: ${JSON.stringify(handle.stderr)}`);
-    });
+
+  const dumpHandles = reported.filter((handle, index) => reported.indexOf(handle) === index);
+
+  // A human reads this dump, so give every finished child a bounded moment to deliver
+  // its stdio completely: a still-running child is left alone and a timeout here only
+  // leaves the dump short, never failing an unrelated check
+  await Promise.all(dumpHandles.map(async (handle) => {
+    if (!handle.exited || handle.closed) return;
+    try {
+      await handle.waitForClose(CLOSE_TIMEOUT_MS);
+    } catch (err) {
+      // Best effort: the verdict above already stands on its own reason
+    }
+  }));
+
+  dumpHandles.forEach((handle) => {
+    console.log(`  stdout: ${JSON.stringify(handle.stdout)}`);
+    console.log(`  stderr: ${JSON.stringify(handle.stderr)}`);
+    if (handle.spawnError) {
+      console.log(`  spawn error: ${handle.spawnError.message}`);
+    }
+  });
 }
 
 /**
@@ -422,6 +646,8 @@ async function runCheck(name, check) {
  * @returns {Promise<void>} Resolves when the check has run
  */
 async function checkC1a(context) {
+  if (context.conflict('127.0.0.1', TEST_PORT)) return;
+
   const child = context.spawn(IN_PROCESS_ARGS, {
     NODE_ENV: 'test',
     HOST: '127.0.0.1',
@@ -435,9 +661,20 @@ async function checkC1a(context) {
   );
 
   const lines = nonEmptyLines(child.stdout);
+  const startup = startupLines(child.stdout);
   context.expect(
-    lines.length === 2 && lines[0] === ENV_NOTICE && lines[1] === STARTUP_LINE_BOUND,
-    `expected stdout to hold the .env notice and one startup line, got ${JSON.stringify(lines)}`
+    startup.length === 1 && startup[0] === STARTUP_LINE_BOUND,
+    `expected exactly one startup line "${STARTUP_LINE_BOUND}" on stdout, got `
+      + `${JSON.stringify(startup)} of ${JSON.stringify(lines)}`
+  );
+  context.expect(
+    lines.every((line) => line === STARTUP_LINE_BOUND || isEnvironmentMessage(line)),
+    `expected every stdout line to be that startup line or an environment message, got `
+      + `${JSON.stringify(lines)}`
+  );
+  context.expect(
+    lines.filter(isEnvironmentMessage).length <= 1,
+    `expected at most one environment message on stdout, got ${JSON.stringify(lines)}`
   );
   context.expect(
     child.stderr === '',
@@ -455,18 +692,37 @@ async function checkC1a(context) {
  * @returns {Promise<void>} Resolves when the check has run
  */
 async function checkC1b(context) {
+  if (context.conflict('0.0.0.0', DEFAULT_PORT)) return;
+
   const child = context.spawn(IN_PROCESS_ARGS, { NODE_ENV: 'test' }, ['HOST', 'PORT']);
+
+  // A .env file that sets HOST or PORT moves the default the server falls back to, so
+  // name that precondition in the label of the wait it would break
+  const envFileNote = context.state.envFilePresent
+    ? ' (src/backend/.env is present and may set HOST or PORT)'
+    : '';
 
   await child.waitFor(
     (handle) => hasLine(handle.stdout, exactLine(STARTUP_LINE_DEFAULT)),
     OUTPUT_TIMEOUT_MS,
-    `the startup line "${STARTUP_LINE_DEFAULT}" on stdout`
+    `the startup line "${STARTUP_LINE_DEFAULT}" on stdout${envFileNote}`
   );
 
   const lines = nonEmptyLines(child.stdout);
+  const startup = startupLines(child.stdout);
   context.expect(
-    lines.length === 2 && lines[0] === ENV_NOTICE && lines[1] === STARTUP_LINE_DEFAULT,
-    `expected stdout to hold the .env notice and one startup line, got ${JSON.stringify(lines)}`
+    startup.length === 1 && startup[0] === STARTUP_LINE_DEFAULT,
+    `expected exactly one startup line "${STARTUP_LINE_DEFAULT}" on stdout, got `
+      + `${JSON.stringify(startup)} of ${JSON.stringify(lines)}`
+  );
+  context.expect(
+    lines.every((line) => line === STARTUP_LINE_DEFAULT || isEnvironmentMessage(line)),
+    `expected every stdout line to be that startup line or an environment message, got `
+      + `${JSON.stringify(lines)}`
+  );
+  context.expect(
+    lines.filter(isEnvironmentMessage).length <= 1,
+    `expected at most one environment message on stdout, got ${JSON.stringify(lines)}`
   );
   context.expect(
     child.stderr === '',
@@ -484,6 +740,8 @@ async function checkC1b(context) {
  * @returns {Promise<void>} Resolves when the check has run
  */
 async function checkC2(context) {
+  if (context.conflict('127.0.0.1', TEST_PORT)) return;
+
   const child = context.spawn(IN_PROCESS_ARGS, {
     NODE_ENV: 'test',
     HOST: '127.0.0.1',
@@ -500,15 +758,20 @@ async function checkC2(context) {
   // logger helper returns before writing under test, so a logger-routed line would
   // leave stdout holding the .env notice alone
   const lines = nonEmptyLines(child.stdout);
-  const startupLines = lines.filter((line) => line === STARTUP_LINE_BOUND);
+  const startup = startupLines(child.stdout);
   context.expect(
-    startupLines.length === 1,
-    `expected the startup line once on stdout, got ${startupLines.length} of `
+    startup.length === 1,
+    `expected exactly one startup-shaped line on stdout, got ${JSON.stringify(startup)} of `
       + `${JSON.stringify(lines)}`
   );
   context.expect(
-    lines.includes(ENV_NOTICE),
-    `expected the .env notice beside the startup line, got ${JSON.stringify(lines)}`
+    lines.every((line) => isStartupLine(line) || isEnvironmentMessage(line)),
+    `expected every stdout line to be the startup line or an environment message, got `
+      + `${JSON.stringify(lines)}`
+  );
+  context.expect(
+    lines.filter(isEnvironmentMessage).length <= 1,
+    `expected at most one environment message on stdout, got ${JSON.stringify(lines)}`
   );
   context.expect(
     child.stderr === '',
@@ -519,36 +782,42 @@ async function checkC2(context) {
   context.expect(child.exited, 'expected the listener to terminate when the check ended');
 }
 
-// The development listener C3 starts; C5 verifies its requests against it
-let developmentChild = null;
-
 /**
  * C3: a development startup keeps its four existing lines and gains the startup line
+ *
+ * The listener it starts belongs to the run, not to a check: C5 sends its requests to
+ * it while it keeps listening, and main() terminates it once every check has finished.
  *
  * @param {Object} context - Run context
  * @returns {Promise<void>} Resolves when the check has run
  */
 async function checkC3(context) {
-  developmentChild = context.observe(spawnServer(ENTRY_POINT_ARGS, {
+  if (context.conflict('127.0.0.1', DEVELOPMENT_PORT)) return;
+
+  const listener = context.share(spawnServer(ENTRY_POINT_ARGS, {
     NODE_ENV: 'development',
     HOST: '127.0.0.1',
     PORT: String(DEVELOPMENT_PORT)
   }, []));
 
-  await developmentChild.waitFor(
+  context.state.developmentListener = listener;
+
+  await listener.waitFor(
     (handle) => nonEmptyLines(handle.stdout).length >= 5,
     OUTPUT_TIMEOUT_MS,
     'the five stdout lines a development startup writes'
   );
 
-  const lines = nonEmptyLines(developmentChild.stdout);
+  const lines = nonEmptyLines(listener.stdout);
+  const startup = startupLines(listener.stdout);
   context.expect(
     lines.length === 5,
     `expected exactly five stdout lines, got ${JSON.stringify(lines)}`
   );
   context.expect(
-    lines[0] === ENV_NOTICE,
-    `expected line 1 to be the .env notice, got ${JSON.stringify(lines[0])}`
+    isEnvironmentMessage(lines[0]),
+    `expected line 1 to be the .env notice or the .env loaded message, got `
+      + `${JSON.stringify(lines[0])}`
   );
   context.expect(
     STARTING_RECORD.test(lines[1]),
@@ -568,8 +837,13 @@ async function checkC3(context) {
     `expected line 5 to be the completion message, got ${JSON.stringify(lines[4])}`
   );
   context.expect(
-    developmentChild.stderr === '',
-    `expected stderr to be empty during startup, got ${JSON.stringify(developmentChild.stderr)}`
+    startup.length === 1,
+    `expected exactly one startup line on stdout, got ${JSON.stringify(startup)} of `
+      + `${JSON.stringify(lines)}`
+  );
+  context.expect(
+    listener.stderr === '',
+    `expected stderr to be empty during startup, got ${JSON.stringify(listener.stderr)}`
   );
 }
 
@@ -580,6 +854,8 @@ async function checkC3(context) {
  * @returns {Promise<void>} Resolves when the check has run
  */
 async function checkC4(context) {
+  if (context.conflict('127.0.0.1', CONFLICT_PORT)) return;
+
   const holder = context.spawn(ENTRY_POINT_ARGS, {
     NODE_ENV: 'development',
     HOST: '127.0.0.1',
@@ -601,23 +877,29 @@ async function checkC4(context) {
   }, []);
 
   await failing.waitForExit(EXIT_TIMEOUT_MS);
+  // Node delivers a finished child's stdio completely only at 'close', so the reads
+  // below wait for it rather than trusting what has arrived by 'exit'
+  await failing.waitForClose(CLOSE_TIMEOUT_MS);
 
   const stdoutLines = nonEmptyLines(failing.stdout);
   const errorRecords = nonEmptyLines(failing.stderr).filter((line) => LOG_RECORD.test(line));
 
   context.expect(
     failing.exitCode === 1,
-    `expected the failing run to exit with status 1, got ${failing.exitCode}`
+    failing.spawnError
+      ? `expected the failing run to exit with status 1, got spawn error: `
+        + `${failing.spawnError.message}`
+      : `expected the failing run to exit with status 1, got ${failing.exitCode}`
   );
   context.expect(
-    !stdoutLines.some((line) => line.startsWith('Server listening at ')),
+    !stdoutLines.some(isStartupLine),
     `expected no startup line on stdout, got ${JSON.stringify(stdoutLines)}`
   );
   context.expect(
     stdoutLines.length === 2
-      && stdoutLines[0] === ENV_NOTICE
+      && isEnvironmentMessage(stdoutLines[0])
       && STARTING_RECORD.test(stdoutLines[1]),
-    `expected stdout to hold only the .env notice and the startup message, got `
+    `expected stdout to hold only an environment message and the startup message, got `
       + `${JSON.stringify(stdoutLines)}`
   );
   context.expect(
@@ -634,20 +916,33 @@ async function checkC4(context) {
 /**
  * C5: the endpoint contract and the per-request log lines are unchanged
  *
- * Runs against the listener C3 left bound, so C3 has to succeed for this to pass.
+ * Sends its requests to the listener C3 started on the same address while that
+ * listener keeps running. When C3 left none behind, or left one that has already
+ * exited, this check starts an equivalent listener itself, so its verdict rests on
+ * what it observes and never on another check's outcome.
  *
  * @param {Object} context - Run context
  * @returns {Promise<void>} Resolves when the check has run
  */
 async function checkC5(context) {
-  const listener = developmentChild;
+  if (context.conflict('127.0.0.1', DEVELOPMENT_PORT)) return;
 
-  if (listener === null || listener.exited) {
-    context.expect(
-      false,
-      `no listener is bound on 127.0.0.1:${DEVELOPMENT_PORT}, so its requests cannot be verified`
+  let listener = context.state.developmentListener;
+
+  if (!listener || listener.exited) {
+    listener = context.share(spawnServer(ENTRY_POINT_ARGS, {
+      NODE_ENV: 'development',
+      HOST: '127.0.0.1',
+      PORT: String(DEVELOPMENT_PORT)
+    }, []));
+
+    context.state.developmentListener = listener;
+
+    await listener.waitFor(
+      (handle) => hasLine(handle.stdout, exactLine(STARTUP_LINE_DEVELOPMENT)),
+      OUTPUT_TIMEOUT_MS,
+      `the listener this check started on 127.0.0.1:${DEVELOPMENT_PORT} to announce it`
     );
-    return;
   }
 
   const request = (method, requestPath) => httpRequest({
@@ -728,6 +1023,15 @@ async function checkC5(context) {
     'the WARN request line for POST /hello on stderr'
   );
 
+  // The announcement is one line per listener start, never one per request or per
+  // connection: recount the address-bearing lines now that the three requests are done
+  const announced = startupLines(listener.stdout);
+  context.expect(
+    announced.length === 1,
+    `expected exactly one startup line on the listener's stdout after three requests, got `
+      + `${JSON.stringify(announced)}`
+  );
+
   await listener.kill();
   context.expect(listener.exited, 'expected the listener to terminate when the check ended');
 }
@@ -738,12 +1042,37 @@ async function checkC5(context) {
  * @returns {Promise<number>} Exit status: 0 only when all six checks pass
  */
 async function main() {
-  await runCheck('C1a startup line names the bound address (HOST/PORT set)', checkC1a);
-  await runCheck('C1b startup line names the default address (HOST/PORT unset)', checkC1b);
-  await runCheck('C2 startup line survives NODE_ENV=test', checkC2);
-  await runCheck('C3 existing startup output preserved (development run)', checkC3);
-  await runCheck('C4 failure path prints no startup line and exits 1', checkC4);
-  await runCheck('C5 endpoint and per-request logging unchanged', checkC5);
+  const run = { shared: [], state: {} };
+
+  // The criteria name fixed addresses, so establish the environment before the first
+  // check runs: an address another process holds is a conflict, never a feature defect
+  run.state.conflicts = await probeScenarioAddresses();
+
+  run.state.envFilePresent = await detectEnvFile();
+  if (run.state.envFilePresent) {
+    console.log('Environment precondition: src/backend/.env is present, so config.js writes '
+      + '"Environment variables loaded from .env file" instead of the .env notice; the checks '
+      + 'accept either message, and a .env that sets HOST or PORT changes the address the '
+      + 'defaults check (C1b) observes');
+  }
+
+  try {
+    await runCheck('C1a startup line names the bound address (HOST/PORT set)', checkC1a, run);
+    await runCheck('C1b startup line names the default address (HOST/PORT unset)', checkC1b, run);
+    await runCheck('C2 startup line survives NODE_ENV=test', checkC2, run);
+    await runCheck('C3 existing startup output preserved (development run)', checkC3, run);
+    await runCheck('C4 failure path prints no startup line and exits 1', checkC4, run);
+    await runCheck('C5 endpoint and per-request logging unchanged', checkC5, run);
+  } finally {
+    // Every handle any check shared outlives that check, so the run releases them itself
+    for (const handle of run.shared) {
+      try {
+        await handle.kill();
+      } catch (err) {
+        // A listener that is already gone needs no termination
+      }
+    }
+  }
 
   console.log(`${results.passed} checks passed, ${results.failed} failed`);
   return results.failed === 0 ? 0 : 1;

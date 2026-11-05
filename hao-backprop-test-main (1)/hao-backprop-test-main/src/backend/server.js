@@ -111,6 +111,9 @@ function startServer() {
         // Log successful server start
         logServerStart(HOST, PORT);
         
+        // Announce the bound address on standard output, unconditionally
+        console.log(`Server listening at http://${HOST}:${PORT}`);
+
         // Resolve the promise with the server instance
         resolve(server);
       });

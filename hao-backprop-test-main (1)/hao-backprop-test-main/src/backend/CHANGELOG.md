@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Print `Server listening at http://127.0.0.1:3100` on stdout at startup, even under `NODE_ENV=test`
 - Future features will be listed here
 
 ### Changed

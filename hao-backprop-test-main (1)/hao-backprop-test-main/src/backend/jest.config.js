@@ -24,7 +24,8 @@ module.exports = {
     '!**/node_modules/**',
     '!**/coverage/**',
     '!**/jest.config.js',
-    '!**/.eslintrc.js'
+    '!**/.eslintrc.js',
+    '!**/scripts/**'
   ],
   
   // Set coverage thresholds - failing the test run if not met
